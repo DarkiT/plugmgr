@@ -26,6 +26,7 @@ type Plugin interface {
 	PreUnload() error
 	Shutdown() error
 	ManageConfig(config interface{}) (interface{}, error)
+	ConfigType() interface{}
 }
 
 type PluginStats struct {

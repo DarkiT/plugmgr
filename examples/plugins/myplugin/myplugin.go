@@ -96,3 +96,7 @@ func (p *MyPlugin) ManageConfig(config interface{}) (interface{}, error) {
 	// 返回更新后的配置
 	return p.Config, nil
 }
+
+func (p *MyPlugin) ConfigType() interface{} {
+	return p.Config
+}

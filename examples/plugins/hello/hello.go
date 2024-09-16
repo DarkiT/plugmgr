@@ -85,3 +85,7 @@ func (p *HelloPlugin) ManageConfig(config interface{}) (interface{}, error) {
 	fmt.Println("HelloPlugin config updated:", p.config)
 	return p.config, nil
 }
+
+func (p *HelloPlugin) ConfigType() interface{} {
+	return p.config
+}

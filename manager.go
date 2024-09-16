@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/darkit/plugins/copier"
 	"github.com/darkit/slog"
 )
 
@@ -365,6 +366,81 @@ func (m *Manager) checkDependency(depName, constraint string) error {
 	return nil
 }
 
+func (m *Manager) getPluginConfigType(pluginName string) (interface{}, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	plugin, exists := m.plugins[pluginName]
+	if !exists {
+		return nil, ErrPluginNotFound
+	}
+
+	if err := plugin.load(); err != nil {
+		return nil, fmt.Errorf("加载插件 %s 失败: %w", pluginName, err)
+	}
+
+	return plugin.loaded.ConfigType(), nil
+}
+
+func ManagePluginConfigGenericNew[T any](m *Manager, name string, config *T) (T, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var zero T
+	plugin, exists := m.plugins[name]
+	if !exists {
+		return zero, ErrPluginNotFound
+	}
+
+	if err := plugin.load(); err != nil {
+		return zero, fmt.Errorf("加载插件 %s 失败: %w", name, err)
+	}
+
+	var updatedConfig interface{}
+	var err error
+
+	if config == nil {
+		updatedConfig, err = plugin.loaded.ManageConfig(nil)
+	} else {
+		updatedConfig, err = plugin.loaded.ManageConfig(*config)
+	}
+
+	if err != nil {
+		return zero, fmt.Errorf("更新插件 %s 的配置失败: %w", name, err)
+	}
+
+	// 尝试将 updatedConfig 转换为 T 类型
+	typedConfig, ok := updatedConfig.(T)
+	if !ok {
+		return zero, fmt.Errorf("插件 %s 返回的配置类型不匹配", name)
+	}
+
+	// 如果 config 不为 nil，则复制配置
+	if config != nil {
+		if err = copier.Copy(config, &typedConfig); err != nil {
+			return zero, fmt.Errorf("插件 %s 返回的配置类型不匹配: %w", name, err)
+		}
+
+		// 序列化配置
+		var buf bytes.Buffer
+		encoder := gob.NewEncoder(&buf)
+		if err := encoder.Encode(*config); err != nil {
+			return zero, fmt.Errorf("序列化插件配置失败: %w", err)
+		}
+
+		// 保存配置
+		m.config.PluginConfigs[name] = buf.Bytes()
+
+		if err := m.config.Save(); err != nil {
+			return zero, fmt.Errorf("保存配置失败: %w", err)
+		}
+
+		m.logger.Info("插件配置已更新", slog.String("plugin", name))
+	}
+
+	return typedConfig, nil
+}
+
 func ManagePluginConfigGeneric[T any](m *Manager, name string, config *T) (T, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -394,6 +470,12 @@ func ManagePluginConfigGeneric[T any](m *Manager, name string, config *T) (T, er
 		return zero, fmt.Errorf("更新插件 %s 的配置失败: %w", name, err)
 	}
 
+	//copier.Copy(target, source)
+	//target：复制到的目标对象。
+	//source：复制自的源对象。
+	//if err = copier.Copy(&updatedConfig, &config); err != nil {
+	//	return zero, fmt.Errorf("插件 %s 返回的配置类型不匹配", name)
+	//}
 	// 尝试将updatedConfig转换为T类型
 	typedConfig, ok := updatedConfig.(T)
 	if !ok {
@@ -417,7 +499,7 @@ func ManagePluginConfigGeneric[T any](m *Manager, name string, config *T) (T, er
 		m.logger.Info("插件配置已更新", slog.String("plugin", name))
 	}
 
-	return typedConfig, nil
+	return updatedConfig, nil
 }
 
 func ExecutePluginGeneric[T any, R any](m *Manager, name string, data T) (R, error) {
