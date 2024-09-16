@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"plugin"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -55,6 +56,9 @@ func (lp *lazyPlugin) load() error {
 }
 
 func NewManager(pluginDir, configPath string, publicKeyPath ...string) (*Manager, error) {
+	if runtime.GOOS == "windows" {
+		return nil, fmt.Errorf("插件系统暂不支持Windows环境下运行")
+	}
 	config, err := LoadConfig(configPath, pluginDir)
 	if err != nil {
 		return nil, fmt.Errorf("加载配置失败: %w", err)
@@ -68,7 +72,7 @@ func NewManager(pluginDir, configPath string, publicKeyPath ...string) (*Manager
 		dependencies: make(map[string][]string),
 		stats:        make(map[string]*PluginStats),
 		eventBus:     NewEventBus(),
-		sandbox:      NewLinuxSandbox(sandboxDir),
+		sandbox:      NewSandbox(sandboxDir),
 		logger:       slog.Default("plugins"),
 		pluginDir:    pluginDir,
 	}
