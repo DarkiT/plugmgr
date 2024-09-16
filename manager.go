@@ -147,10 +147,8 @@ func (m *Manager) HotReload(name string, path string) error {
 	newPlugin := newLazyPlugin.loaded
 
 	metadata := newPlugin.Metadata()
-	for dep, constraint := range metadata.Dependencies {
-		if err := m.checkDependency(dep, constraint); err != nil {
-			return fmt.Errorf("%s 新版本的依赖检查失败: %w", name, err)
-		}
+	if err := m.checkDependencies(name, metadata.Dependencies); err != nil {
+		return fmt.Errorf("插件 %s 关联依赖检查未通过: %w", name, err)
 	}
 
 	if err := newPlugin.Init(); err != nil {
@@ -278,6 +276,27 @@ func (m *Manager) SubscribeToEvent(eventName string, handler EventHandler) {
 	m.eventBus.Subscribe(eventName, handler)
 }
 
+func (m *Manager) loadPluginConfig(pluginName string, data ...interface{}) ([]byte, error) {
+	savedConfigBytes, hasSavedConfig := m.config.PluginConfigs[pluginName]
+
+	if hasSavedConfig {
+		var configToUse []byte
+		decoder := gob.NewDecoder(bytes.NewReader(savedConfigBytes))
+		if err := decoder.Decode(&configToUse); err != nil {
+			return nil, fmt.Errorf("解码插件 %s 的配置信息失败: %w", pluginName, err)
+		}
+		return configToUse, nil
+	} else if len(data) > 0 {
+		serializer, err := Serializer(data[0])
+		if err != nil {
+			return nil, fmt.Errorf("编码插件 %s 的配置信息失败: %w", pluginName, err)
+		}
+		return serializer, nil
+	}
+
+	return nil, nil
+}
+
 func (m *Manager) LoadPluginWithData(path string, data ...interface{}) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -289,7 +308,6 @@ func (m *Manager) LoadPluginWithData(path string, data ...interface{}) error {
 		return fmt.Errorf("插件 %s 已加载", pluginName)
 	}
 
-	// 验证插件签名（如果启用）
 	if m.publicKeyPath != "" {
 		if err := m.VerifyPluginSignature(path, m.publicKeyPath); err != nil {
 			return fmt.Errorf("验证插件签名失败: %w", err)
@@ -303,41 +321,25 @@ func (m *Manager) LoadPluginWithData(path string, data ...interface{}) error {
 
 	plugin := lazyPlug.loaded
 
-	// 检查是否有保存的配置
-	savedConfigBytes, hasSavedConfig := m.config.PluginConfigs[pluginName]
-
-	var configToUse []byte
-	if hasSavedConfig {
-		decoder := gob.NewDecoder(bytes.NewReader(savedConfigBytes))
-		if err := decoder.Decode(&configToUse); err != nil {
-			return fmt.Errorf("解码保存的插件配置失败: %w", err)
-		}
-	} else if len(data) > 0 {
-		serializer, err := Serializer(data[0])
-		if err != nil {
-			return err
-		}
-		configToUse = serializer
+	configToUse, err := m.loadPluginConfig(pluginName, data...)
+	if err != nil {
+		return err
 	}
 
-	// 调用插件的 PreLoad 方法
 	if err := plugin.PreLoad(configToUse); err != nil {
 		return fmt.Errorf("%s 的预加载钩子失败: %w", pluginName, err)
 	}
 
-	// 调用插件的 Init 方法
 	if err := plugin.Init(); err != nil {
 		return fmt.Errorf("%s 的初始化失败: %w", pluginName, err)
 	}
 
-	// 调用插件的 PostLoad 方法
 	if err := plugin.PostLoad(); err != nil {
 		return fmt.Errorf("%s 的后加载钩子失败: %w", pluginName, err)
 	}
 
 	metadata := plugin.Metadata()
 
-	// 更新配置
 	if configToUse != nil {
 		metadata.Config = configToUse
 		var buf bytes.Buffer
@@ -348,34 +350,24 @@ func (m *Manager) LoadPluginWithData(path string, data ...interface{}) error {
 		m.config.PluginConfigs[pluginName] = buf.Bytes()
 	}
 
-	// 检查并记录插件依赖
-	m.dependencies[pluginName] = make([]string, 0, len(metadata.Dependencies))
-	for dep, constraint := range metadata.Dependencies {
-		m.dependencies[pluginName] = append(m.dependencies[pluginName], dep)
-		if err := m.checkDependency(dep, constraint); err != nil {
-			delete(m.plugins, pluginName)
-			delete(m.stats, pluginName)
-			delete(m.dependencies, pluginName)
-			return fmt.Errorf("%s 的依赖检查失败: %w", pluginName, err)
-		}
+	if err := m.checkDependencies(pluginName, metadata.Dependencies); err != nil {
+		return err
 	}
 
-	// 将插件添加到已加载插件列表
 	m.plugins[pluginName] = lazyPlug
 	m.stats[pluginName] = &PluginStats{}
 
-	// 保存更新后的配置
 	if err := m.config.Save(); err != nil {
 		return fmt.Errorf("保存配置失败: %w", err)
 	}
 
-	// 发布插件加载事件
 	m.eventBus.Publish(PluginLoadedEvent{PluginName: pluginName})
 
 	m.logger.Info("插件已加载",
 		slog.String("plugin", pluginName),
 		slog.String("version", metadata.Version),
-		slog.Any("config", metadata.Config))
+		slog.Any("config", metadata.Config),
+	)
 
 	return nil
 }
@@ -393,19 +385,48 @@ func (m *Manager) GetPluginConfig(name string) (interface{}, error) {
 	return metadata.Config, nil
 }
 
-func (m *Manager) checkDependency(depName, constraint string) error {
-	depPlugin, exists := m.plugins[depName]
-	if !exists {
-		return fmt.Errorf("缺少依赖: %s", depName)
+func (m *Manager) checkDependencies(pluginName string, dependencies map[string]string) error {
+	visited := make(map[string]bool)
+	var checkDep func(string, string, []string) error
+
+	checkDep = func(depName, constraint string, depChain []string) error {
+		if visited[depName] {
+			cycle := append(depChain, depName)
+			return fmt.Errorf("检测到循环依赖: %s", strings.Join(cycle, " -> "))
+		}
+		if visited[depName] {
+			cycle := append(depChain, depName)
+			return fmt.Errorf("检测到循环依赖: %s", strings.Join(cycle, " -> "))
+		}
+		visited[depName] = true
+
+		depPlugin, exists := m.plugins[depName]
+		if !exists {
+			return fmt.Errorf("缺少依赖: %s", depName)
+		}
+
+		if err := depPlugin.load(); err != nil {
+			return fmt.Errorf("加载依赖 %s 失败: %w", depName, err)
+		}
+
+		depMetadata := depPlugin.loaded.Metadata()
+		if !isVersionCompatible(depMetadata.Version, constraint) {
+			return fmt.Errorf("依赖 %s 的版本不兼容: 需要 %s, 得到 %s", depName, constraint, depMetadata.Version)
+		}
+
+		for subDepName, subConstraint := range depMetadata.Dependencies {
+			if err := checkDep(subDepName, subConstraint, depChain); err != nil {
+				return err
+			}
+		}
+
+		return nil
 	}
 
-	if err := depPlugin.load(); err != nil {
-		return fmt.Errorf("加载依赖 %s 失败: %w", depName, err)
-	}
-
-	depVersion := depPlugin.loaded.Metadata().Version
-	if !isVersionCompatible(depVersion, constraint) {
-		return fmt.Errorf("依赖 %s 的版本不兼容: 需要 %s, 得到 %s", depName, constraint, depVersion)
+	for depName, constraint := range dependencies {
+		if err := checkDep(depName, constraint, []string{pluginName}); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -414,7 +435,6 @@ func (m *Manager) checkDependency(depName, constraint string) error {
 func ExecutePluginGeneric[T any, R any](m *Manager, name string, data T) (R, error) {
 	m.mu.RLock()
 	plugin, exists := m.plugins[name]
-	stats := m.stats[name]
 	m.mu.RUnlock()
 
 	var zero R
@@ -436,6 +456,7 @@ func ExecutePluginGeneric[T any, R any](m *Manager, name string, data T) (R, err
 	executionTime := time.Since(start)
 
 	m.mu.Lock()
+	stats := m.stats[name]
 	stats.ExecutionCount++
 	stats.LastExecutionTime = executionTime
 	stats.TotalExecutionTime += executionTime
@@ -445,9 +466,11 @@ func ExecutePluginGeneric[T any, R any](m *Manager, name string, data T) (R, err
 		return zero, fmt.Errorf("%s 的执行失败: %w", name, err)
 	}
 
-	m.logger.Info("插件已执行", slog.String("plugin", name), slog.Duration("duration", executionTime))
+	m.logger.Info("插件已执行",
+		slog.String("plugin", name),
+		slog.Duration("duration", executionTime),
+	)
 
-	// 尝试将结果转换为所需的类型
 	typedResult, ok := result.(R)
 	if !ok {
 		return zero, fmt.Errorf("插件 %s 返回的结果类型不匹配", name)
