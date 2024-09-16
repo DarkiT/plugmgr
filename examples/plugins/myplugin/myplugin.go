@@ -42,13 +42,14 @@ func (p *MyPlugin) Metadata() pm.PluginMetadata {
 	}
 }
 
-func (p *MyPlugin) PreLoad(config interface{}) error {
+func (p *MyPlugin) PreLoad(config []byte) error {
 	fmt.Println("MyPlugin: PreLoad called")
-	if cfg, ok := config.(MyPluginConfig); ok {
-		p.Config = cfg
-	} else {
+	newConfig, err := pm.Deserializer[MyPluginConfig](config)
+	if err != nil {
 		return fmt.Errorf("invalid config type")
 	}
+	p.Config = newConfig
+
 	return nil
 }
 
@@ -78,21 +79,23 @@ func (p *MyPlugin) Shutdown() error {
 	return nil
 }
 
-func (p *MyPlugin) ManageConfig(config interface{}) (interface{}, error) {
-	if config == nil {
-		// 返回当前配置
-		return p.Config, nil
+func (p *MyPlugin) ManageConfig(config []byte) ([]byte, error) {
+	c, err := pm.Serializer(p.Config)
+	if err != nil {
+		return nil, err
 	}
 
-	// 尝试类型断言
-	newConfig, ok := config.(MyPluginConfig)
-	if !ok {
+	if config == nil {
+		return c, nil
+	}
+
+	newConfig, err := pm.Deserializer[MyPluginConfig](config)
+	if err != nil {
 		return nil, fmt.Errorf("invalid config type")
 	}
 
-	// 更新配置
 	p.Config = newConfig
+	fmt.Println("HelloPlugin config updated:", p.Config)
 
-	// 返回更新后的配置
-	return p.Config, nil
+	return c, nil
 }

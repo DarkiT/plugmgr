@@ -172,7 +172,7 @@ func (m *Manager) HotReload(name string, path string) error {
 	return nil
 }
 
-func (m *Manager) ManagePluginConfig(name string, config interface{}) (interface{}, error) {
+func (m *Manager) ManagePluginConfig(name string, config interface{}) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -184,8 +184,11 @@ func (m *Manager) ManagePluginConfig(name string, config interface{}) (interface
 	if err := plugin.load(); err != nil {
 		return nil, fmt.Errorf("加载插件 %s 失败: %w", name, err)
 	}
-
-	updatedConfig, err := plugin.loaded.ManageConfig(config)
+	serializer, err := Serializer(config)
+	if err != nil {
+		return nil, err
+	}
+	updatedConfig, err := plugin.loaded.ManageConfig(serializer)
 	if err != nil {
 		return nil, fmt.Errorf("更新插件 %s 的配置失败: %w", name, err)
 	}
@@ -299,14 +302,18 @@ func (m *Manager) LoadPluginWithData(path string, data ...interface{}) error {
 	// 检查是否有保存的配置
 	savedConfigBytes, hasSavedConfig := m.config.PluginConfigs[pluginName]
 
-	var configToUse interface{}
+	var configToUse []byte
 	if hasSavedConfig {
 		decoder := gob.NewDecoder(bytes.NewReader(savedConfigBytes))
 		if err := decoder.Decode(&configToUse); err != nil {
 			return fmt.Errorf("解码保存的插件配置失败: %w", err)
 		}
 	} else if len(data) > 0 {
-		configToUse = data[0]
+		serializer, err := Serializer(data[0])
+		if err != nil {
+			return err
+		}
+		configToUse = serializer
 	}
 
 	// 调用插件的 PreLoad 方法

@@ -19,13 +19,13 @@ type PluginMetadata struct {
 
 type Plugin interface {
 	Metadata() PluginMetadata
-	PreLoad(config interface{}) error
 	Init() error
 	PostLoad() error
-	Execute(data interface{}) (interface{}, error)
 	PreUnload() error
 	Shutdown() error
-	ManageConfig(config interface{}) (interface{}, error)
+	PreLoad(config []byte) error
+	ManageConfig(config []byte) ([]byte, error)
+	Execute(data interface{}) (interface{}, error)
 }
 
 type PluginStats struct {

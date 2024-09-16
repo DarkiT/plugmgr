@@ -49,15 +49,14 @@ func (p *MathPlugin) Shutdown() error {
 	return nil
 }
 
-func (p *MathPlugin) PreLoad(config interface{}) error {
-	if config != nil {
-		if cfg, ok := config.(MathPluginConfig); ok {
-			p.config = cfg
-		} else {
-			return fmt.Errorf("invalid config type")
-		}
+func (p *MathPlugin) PreLoad(config []byte) error {
+	fmt.Println("MathPlugin: PreLoad called")
+	newConfig, err := pm.Deserializer[MathPluginConfig](config)
+	if err != nil {
+		return fmt.Errorf("invalid config type")
 	}
-	fmt.Println("MathPlugin pre-load with config:", p.config)
+	p.config = newConfig
+
 	return nil
 }
 
@@ -71,19 +70,25 @@ func (p *MathPlugin) PreUnload() error {
 	return nil
 }
 
-func (p *MathPlugin) ManageConfig(config interface{}) (interface{}, error) {
-	if config == nil {
-		return p.config, nil
+func (p *MathPlugin) ManageConfig(config []byte) ([]byte, error) {
+	c, err := pm.Serializer(p.config)
+	if err != nil {
+		return nil, err
 	}
 
-	newConfig, ok := config.(MathPluginConfig)
-	if !ok {
+	if config == nil {
+		return c, nil
+	}
+
+	newConfig, err := pm.Deserializer[MathPluginConfig](config)
+	if err != nil {
 		return nil, fmt.Errorf("invalid config type")
 	}
 
 	p.config = newConfig
-	fmt.Println("MathPlugin config updated:", p.config)
-	return p.config, nil
+	fmt.Println("HelloPlugin config updated:", p.config)
+
+	return c, nil
 }
 
 func (p *MathPlugin) Add(a, b int) int {

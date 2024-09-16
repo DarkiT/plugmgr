@@ -49,15 +49,14 @@ func (p *HelloPlugin) Shutdown() error {
 	return nil
 }
 
-func (p *HelloPlugin) PreLoad(config interface{}) error {
-	if config != nil {
-		if cfg, ok := config.(HelloPluginConfig); ok {
-			p.config = cfg
-		} else {
-			return fmt.Errorf("invalid config type")
-		}
+func (p *HelloPlugin) PreLoad(config []byte) error {
+	fmt.Println("HelloPlugin: PreLoad called")
+	newConfig, err := pm.Deserializer[HelloPluginConfig](config)
+	if err != nil {
+		return fmt.Errorf("invalid config type")
 	}
-	fmt.Println("HelloPlugin pre-load with config:", p.config)
+	p.config = newConfig
+
 	return nil
 }
 
@@ -71,17 +70,23 @@ func (p *HelloPlugin) PreUnload() error {
 	return nil
 }
 
-func (p *HelloPlugin) ManageConfig(config interface{}) (interface{}, error) {
-	if config == nil {
-		return p.config, nil
+func (p *HelloPlugin) ManageConfig(config []byte) ([]byte, error) {
+	c, err := pm.Serializer(p.config)
+	if err != nil {
+		return nil, err
 	}
 
-	newConfig, ok := config.(HelloPluginConfig)
-	if !ok {
+	if config == nil {
+		return c, nil
+	}
+
+	newConfig, err := pm.Deserializer[HelloPluginConfig](config)
+	if err != nil {
 		return nil, fmt.Errorf("invalid config type")
 	}
 
 	p.config = newConfig
 	fmt.Println("HelloPlugin config updated:", p.config)
-	return p.config, nil
+
+	return c, nil
 }
