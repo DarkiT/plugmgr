@@ -6,25 +6,42 @@ import (
 	pm "github.com/darkit/plugins"
 )
 
-type MathPlugin struct{}
+var Plugin MathPlugin
+
+type MathPluginConfig struct {
+	DefaultValue int
+}
+
+type MathPlugin struct {
+	config MathPluginConfig
+}
+
+func init() {
+	Plugin.config = MathPluginConfig{DefaultValue: 0}
+}
 
 func (p *MathPlugin) Metadata() pm.PluginMetadata {
 	return pm.PluginMetadata{
 		Name:         "MathPlugin",
-		Version:      "1.0.0",
+		Version:      "1.1.0",
 		Dependencies: map[string]string{},
+		Config:       p.config,
 	}
 }
 
 func (p *MathPlugin) Init() error {
-	fmt.Println("MathPlugin initialized")
+	fmt.Println("MathPlugin initialized with default value:", p.config.DefaultValue)
 	return nil
 }
 
-func (p *MathPlugin) Execute() error {
-	result := p.Add(5, 3)
-	fmt.Printf("MathPlugin: 5 + 3 = %d\n", result)
-	return nil
+func (p *MathPlugin) Execute(data interface{}) (interface{}, error) {
+	params, ok := data.([]int)
+	if !ok || len(params) != 2 {
+		return nil, fmt.Errorf("invalid input: expected two integers")
+	}
+	result := p.Add(params[0], params[1])
+	fmt.Printf("MathPlugin: %d + %d = %d\n", params[0], params[1], result)
+	return result, nil
 }
 
 func (p *MathPlugin) Shutdown() error {
@@ -32,8 +49,15 @@ func (p *MathPlugin) Shutdown() error {
 	return nil
 }
 
-func (p *MathPlugin) PreLoad() error {
-	fmt.Println("MathPlugin pre-load")
+func (p *MathPlugin) PreLoad(config interface{}) error {
+	if config != nil {
+		if cfg, ok := config.(MathPluginConfig); ok {
+			p.config = cfg
+		} else {
+			return fmt.Errorf("invalid config type")
+		}
+	}
+	fmt.Println("MathPlugin pre-load with config:", p.config)
 	return nil
 }
 
@@ -47,8 +71,21 @@ func (p *MathPlugin) PreUnload() error {
 	return nil
 }
 
-func (p *MathPlugin) Add(a, b int) int {
-	return a + b
+func (p *MathPlugin) ManageConfig(config interface{}) (interface{}, error) {
+	if config == nil {
+		return p.config, nil
+	}
+
+	newConfig, ok := config.(MathPluginConfig)
+	if !ok {
+		return nil, fmt.Errorf("invalid config type")
+	}
+
+	p.config = newConfig
+	fmt.Println("MathPlugin config updated:", p.config)
+	return p.config, nil
 }
 
-var Plugin MathPlugin
+func (p *MathPlugin) Add(a, b int) int {
+	return a + b + p.config.DefaultValue
+}

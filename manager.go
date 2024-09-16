@@ -118,41 +118,8 @@ func (m *Manager) UnloadPlugin(name string) error {
 	return nil
 }
 
-func (m *Manager) ExecutePlugin(name string, data ...interface{}) error {
-	m.mu.RLock()
-	plugin, exists := m.plugins[name]
-	stats := m.stats[name]
-	m.mu.RUnlock()
-
-	if !exists {
-		return ErrPluginNotFound
-	}
-
-	if err := m.sandbox.Enable(); err != nil {
-		return fmt.Errorf("为 %s 启用沙箱失败: %w", name, err)
-	}
-	defer m.sandbox.Disable()
-
-	if err := plugin.load(); err != nil {
-		return fmt.Errorf("加载插件 %s 失败: %w", name, err)
-	}
-
-	start := time.Now()
-	err := plugin.loaded.Execute(data...)
-	executionTime := time.Since(start)
-
-	m.mu.Lock()
-	stats.ExecutionCount++
-	stats.LastExecutionTime = executionTime
-	stats.TotalExecutionTime += executionTime
-	m.mu.Unlock()
-
-	if err != nil {
-		return fmt.Errorf("%s 的执行失败: %w", name, err)
-	}
-
-	m.logger.Info("插件已执行", slog.String("plugin", name), slog.Duration("duration", executionTime))
-	return nil
+func (m *Manager) ExecutePlugin(name string, data any) (any, error) {
+	return ExecutePluginGeneric[any, any](m, name, data)
 }
 
 func (m *Manager) HotReload(name string, path string) error {
@@ -205,40 +172,11 @@ func (m *Manager) HotReload(name string, path string) error {
 	return nil
 }
 
-func (m *Manager) UpdatePluginConfig(name string, config interface{}) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	plugin, exists := m.plugins[name]
-	if !exists {
-		return ErrPluginNotFound
+func (m *Manager) ManagePluginConfig(name string, config any) (any, error) {
+	if config == nil {
+		return ManagePluginConfigGeneric[any](m, name, nil)
 	}
-
-	if err := plugin.load(); err != nil {
-		return fmt.Errorf("加载插件 %s 失败: %w", name, err)
-	}
-
-	if err := plugin.loaded.UpdateConfig(config); err != nil {
-		return fmt.Errorf("更新插件 %s 的配置失败: %w", name, err)
-	}
-
-	// 序列化配置
-	var buf bytes.Buffer
-	encoder := gob.NewEncoder(&buf)
-	if err := encoder.Encode(config); err != nil {
-		return fmt.Errorf("序列化插件配置失败: %w", err)
-	}
-
-	// 更新配置中的插件配置
-	m.config.PluginConfigs[name] = buf.Bytes()
-
-	// 保存更新后的配置
-	if err := m.config.Save(); err != nil {
-		return fmt.Errorf("保存配置失败: %w", err)
-	}
-
-	m.logger.Info("插件配置已更新", slog.String("plugin", name))
-	return nil
+	return ManagePluginConfigGeneric(m, name, &config)
 }
 
 func (m *Manager) EnablePlugin(name string) error {
@@ -425,6 +363,106 @@ func (m *Manager) checkDependency(depName, constraint string) error {
 	}
 
 	return nil
+}
+
+func ManagePluginConfigGeneric[T any](m *Manager, name string, config *T) (T, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var zero T
+	plugin, exists := m.plugins[name]
+	if !exists {
+		return zero, ErrPluginNotFound
+	}
+
+	if err := plugin.load(); err != nil {
+		return zero, fmt.Errorf("加载插件 %s 失败: %w", name, err)
+	}
+
+	var updatedConfig interface{}
+	var err error
+
+	if config == nil {
+		// 如果config为nil,获取当前配置
+		updatedConfig, err = plugin.loaded.ManageConfig(nil)
+	} else {
+		// 否则,更新配置
+		updatedConfig, err = plugin.loaded.ManageConfig(*config)
+	}
+
+	if err != nil {
+		return zero, fmt.Errorf("更新插件 %s 的配置失败: %w", name, err)
+	}
+
+	// 尝试将updatedConfig转换为T类型
+	typedConfig, ok := updatedConfig.(T)
+	if !ok {
+		return zero, fmt.Errorf("插件 %s 返回的配置类型不匹配", name)
+	}
+
+	// 如果提供了新的配置,则保存
+	if config != nil {
+		var buf bytes.Buffer
+		encoder := gob.NewEncoder(&buf)
+		if err := encoder.Encode(typedConfig); err != nil {
+			return zero, fmt.Errorf("序列化插件配置失败: %w", err)
+		}
+
+		m.config.PluginConfigs[name] = buf.Bytes()
+
+		if err := m.config.Save(); err != nil {
+			return zero, fmt.Errorf("保存配置失败: %w", err)
+		}
+
+		m.logger.Info("插件配置已更新", slog.String("plugin", name))
+	}
+
+	return typedConfig, nil
+}
+
+func ExecutePluginGeneric[T any, R any](m *Manager, name string, data T) (R, error) {
+	m.mu.RLock()
+	plugin, exists := m.plugins[name]
+	stats := m.stats[name]
+	m.mu.RUnlock()
+
+	var zero R
+	if !exists {
+		return zero, ErrPluginNotFound
+	}
+
+	if err := m.sandbox.Enable(); err != nil {
+		return zero, fmt.Errorf("为 %s 启用沙箱失败: %w", name, err)
+	}
+	defer m.sandbox.Disable()
+
+	if err := plugin.load(); err != nil {
+		return zero, fmt.Errorf("加载插件 %s 失败: %w", name, err)
+	}
+
+	start := time.Now()
+	result, err := plugin.loaded.Execute(data)
+	executionTime := time.Since(start)
+
+	m.mu.Lock()
+	stats.ExecutionCount++
+	stats.LastExecutionTime = executionTime
+	stats.TotalExecutionTime += executionTime
+	m.mu.Unlock()
+
+	if err != nil {
+		return zero, fmt.Errorf("%s 的执行失败: %w", name, err)
+	}
+
+	m.logger.Info("插件已执行", slog.String("plugin", name), slog.Duration("duration", executionTime))
+
+	// 尝试将结果转换为所需的类型
+	typedResult, ok := result.(R)
+	if !ok {
+		return zero, fmt.Errorf("插件 %s 返回的结果类型不匹配", name)
+	}
+
+	return typedResult, nil
 }
 
 func isVersionCompatible(currentVersion, constraint string) bool {

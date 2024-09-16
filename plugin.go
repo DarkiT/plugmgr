@@ -22,10 +22,10 @@ type Plugin interface {
 	PreLoad(config interface{}) error
 	Init() error
 	PostLoad() error
-	Execute(data ...interface{}) error
+	Execute(data interface{}) (interface{}, error)
 	PreUnload() error
 	Shutdown() error
-	UpdateConfig(config interface{}) error
+	ManageConfig(config interface{}) (interface{}, error)
 }
 
 type PluginStats struct {

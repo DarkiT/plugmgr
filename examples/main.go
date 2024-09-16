@@ -9,6 +9,18 @@ import (
 	pm "github.com/darkit/plugins"
 )
 
+type MyPluginConfig struct {
+	Key string
+}
+
+type MyPluginInput struct {
+	Data string
+}
+
+type MyPluginOutput struct {
+	Result string
+}
+
 func main() {
 	// 创建插件管理器
 	manager, err := pm.NewManager("./plugins", "config.gob")
@@ -23,9 +35,7 @@ func main() {
 
 	// 加载插件
 	pluginPath := filepath.Join("./plugins", "myplugin.so")
-	initialConfig := map[string]interface{}{
-		"key": "value",
-	}
+	initialConfig := MyPluginConfig{Key: "value"}
 	if err := manager.LoadPluginWithData(pluginPath, initialConfig); err != nil {
 		log.Fatalf("加载插件失败: %v", err)
 	}
@@ -35,8 +45,20 @@ func main() {
 	fmt.Println("已加载的插件:", loadedPlugins)
 
 	// 执行插件
-	if err := manager.ExecutePlugin("myplugin", "some", "data"); err != nil {
+	result, err := manager.ExecutePlugin("myplugin", "some data")
+	if err != nil {
 		log.Printf("执行插件失败: %v", err)
+	} else {
+		fmt.Printf("执行结果: %v\n", result)
+	}
+
+	// 执行插件 (泛型版本)
+	input := MyPluginInput{Data: "some typed data"}
+	typedResult, err := pm.ExecutePluginGeneric[MyPluginInput, MyPluginOutput](manager, "myplugin", input)
+	if err != nil {
+		log.Printf("执行插件失败 (泛型): %v", err)
+	} else {
+		fmt.Printf("执行结果 (泛型): %+v\n", typedResult)
 	}
 
 	// 获取插件统计信息
@@ -47,12 +69,20 @@ func main() {
 		fmt.Printf("插件统计信息: %+v\n", stats)
 	}
 
-	// 更新插件配置
-	newConfig := map[string]interface{}{
-		"new_key": "new_value",
+	// 管理插件配置
+	currentConfig, err := pm.ManagePluginConfigGeneric[MyPluginConfig](manager, "myplugin", nil)
+	if err != nil {
+		log.Printf("获取当前插件配置失败: %v", err)
+	} else {
+		fmt.Printf("当前插件配置: %+v\n", currentConfig)
 	}
-	if err := manager.UpdatePluginConfig("myplugin", newConfig); err != nil {
+
+	newConfig := MyPluginConfig{Key: "new_value"}
+	updatedConfig, err := pm.ManagePluginConfigGeneric(manager, "myplugin", &newConfig)
+	if err != nil {
 		log.Printf("更新插件配置失败: %v", err)
+	} else {
+		fmt.Printf("更新后的插件配置: %+v\n", updatedConfig)
 	}
 
 	// 禁用插件
