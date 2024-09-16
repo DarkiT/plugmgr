@@ -34,3 +34,11 @@ func (e *PluginError) Error() string {
 func (e *PluginError) Unwrap() error {
 	return e.Err
 }
+
+func NewPluginError(op string, plugin string, err error) *PluginError {
+	return &PluginError{
+		Op:     op,
+		Plugin: plugin,
+		Err:    err,
+	}
+}
