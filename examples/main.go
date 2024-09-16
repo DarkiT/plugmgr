@@ -69,20 +69,12 @@ func main() {
 		fmt.Printf("插件统计信息: %+v\n", stats)
 	}
 
-	// 管理插件配置
-	currentConfig, err := pm.ManagePluginConfigGeneric[MyPluginConfig](manager, "myplugin", nil)
-	if err != nil {
-		log.Printf("获取当前插件配置失败: %v", err)
-	} else {
-		fmt.Printf("当前插件配置: %+v\n", currentConfig)
+	// 更新插件配置
+	newConfig := map[string]interface{}{
+		"new_key": "new_value",
 	}
-
-	newConfig := MyPluginConfig{Key: "new_value"}
-	updatedConfig, err := pm.ManagePluginConfigGeneric(manager, "myplugin", &newConfig)
-	if err != nil {
+	if _, err := manager.ManagePluginConfig("myplugin", newConfig); err != nil {
 		log.Printf("更新插件配置失败: %v", err)
-	} else {
-		fmt.Printf("更新后的插件配置: %+v\n", updatedConfig)
 	}
 
 	// 禁用插件

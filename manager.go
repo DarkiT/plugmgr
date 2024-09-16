@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/darkit/plugins/copier"
 	"github.com/darkit/slog"
 )
 
@@ -173,11 +172,46 @@ func (m *Manager) HotReload(name string, path string) error {
 	return nil
 }
 
-func (m *Manager) ManagePluginConfig(name string, config any) (any, error) {
-	if config == nil {
-		return ManagePluginConfigGeneric[any](m, name, nil)
+func (m *Manager) ManagePluginConfig(name string, config interface{}) (interface{}, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	plugin, exists := m.plugins[name]
+	if !exists {
+		return nil, ErrPluginNotFound
 	}
-	return ManagePluginConfigGeneric(m, name, &config)
+
+	if err := plugin.load(); err != nil {
+		return nil, fmt.Errorf("加载插件 %s 失败: %w", name, err)
+	}
+
+	updatedConfig, err := plugin.loaded.ManageConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("更新插件 %s 的配置失败: %w", name, err)
+	}
+
+	// 如果提供的config为nil，则直接返回更新后的配置
+	if config == nil {
+		return updatedConfig, nil
+	}
+
+	// 序列化配置
+	var buf bytes.Buffer
+
+	if err := gob.NewEncoder(&buf).Encode(updatedConfig); err != nil {
+		return nil, fmt.Errorf("序列化插件配置失败: %w", err)
+	}
+
+	// 更新配置中的插件配置
+	m.config.PluginConfigs[name] = buf.Bytes()
+
+	// 保存更新后的配置
+	if err := m.config.Save(); err != nil {
+		return nil, fmt.Errorf("保存配置失败: %w", err)
+	}
+
+	m.logger.Info("插件配置已更新", slog.String("plugin", name))
+	return updatedConfig, nil
 }
 
 func (m *Manager) EnablePlugin(name string) error {
@@ -366,142 +400,6 @@ func (m *Manager) checkDependency(depName, constraint string) error {
 	return nil
 }
 
-func (m *Manager) getPluginConfigType(pluginName string) (interface{}, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	plugin, exists := m.plugins[pluginName]
-	if !exists {
-		return nil, ErrPluginNotFound
-	}
-
-	if err := plugin.load(); err != nil {
-		return nil, fmt.Errorf("加载插件 %s 失败: %w", pluginName, err)
-	}
-
-	return plugin.loaded.ConfigType(), nil
-}
-
-func ManagePluginConfigGenericNew[T any](m *Manager, name string, config *T) (T, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	var zero T
-	plugin, exists := m.plugins[name]
-	if !exists {
-		return zero, ErrPluginNotFound
-	}
-
-	if err := plugin.load(); err != nil {
-		return zero, fmt.Errorf("加载插件 %s 失败: %w", name, err)
-	}
-
-	var updatedConfig interface{}
-	var err error
-
-	if config == nil {
-		updatedConfig, err = plugin.loaded.ManageConfig(nil)
-	} else {
-		updatedConfig, err = plugin.loaded.ManageConfig(*config)
-	}
-
-	if err != nil {
-		return zero, fmt.Errorf("更新插件 %s 的配置失败: %w", name, err)
-	}
-
-	// 尝试将 updatedConfig 转换为 T 类型
-	typedConfig, ok := updatedConfig.(T)
-	if !ok {
-		return zero, fmt.Errorf("插件 %s 返回的配置类型不匹配", name)
-	}
-
-	// 如果 config 不为 nil，则复制配置
-	if config != nil {
-		if err = copier.Copy(config, &typedConfig); err != nil {
-			return zero, fmt.Errorf("插件 %s 返回的配置类型不匹配: %w", name, err)
-		}
-
-		// 序列化配置
-		var buf bytes.Buffer
-		encoder := gob.NewEncoder(&buf)
-		if err := encoder.Encode(*config); err != nil {
-			return zero, fmt.Errorf("序列化插件配置失败: %w", err)
-		}
-
-		// 保存配置
-		m.config.PluginConfigs[name] = buf.Bytes()
-
-		if err := m.config.Save(); err != nil {
-			return zero, fmt.Errorf("保存配置失败: %w", err)
-		}
-
-		m.logger.Info("插件配置已更新", slog.String("plugin", name))
-	}
-
-	return typedConfig, nil
-}
-
-func ManagePluginConfigGeneric[T any](m *Manager, name string, config *T) (T, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	var zero T
-	plugin, exists := m.plugins[name]
-	if !exists {
-		return zero, ErrPluginNotFound
-	}
-
-	if err := plugin.load(); err != nil {
-		return zero, fmt.Errorf("加载插件 %s 失败: %w", name, err)
-	}
-
-	var updatedConfig interface{}
-	var err error
-
-	if config == nil {
-		// 如果config为nil,获取当前配置
-		updatedConfig, err = plugin.loaded.ManageConfig(nil)
-	} else {
-		// 否则,更新配置
-		updatedConfig, err = plugin.loaded.ManageConfig(*config)
-	}
-
-	if err != nil {
-		return zero, fmt.Errorf("更新插件 %s 的配置失败: %w", name, err)
-	}
-
-	//copier.Copy(target, source)
-	//target：复制到的目标对象。
-	//source：复制自的源对象。
-	//if err = copier.Copy(&updatedConfig, &config); err != nil {
-	//	return zero, fmt.Errorf("插件 %s 返回的配置类型不匹配", name)
-	//}
-	// 尝试将updatedConfig转换为T类型
-	typedConfig, ok := updatedConfig.(T)
-	if !ok {
-		return zero, fmt.Errorf("插件 %s 返回的配置类型不匹配", name)
-	}
-
-	// 如果提供了新的配置,则保存
-	if config != nil {
-		var buf bytes.Buffer
-		encoder := gob.NewEncoder(&buf)
-		if err := encoder.Encode(typedConfig); err != nil {
-			return zero, fmt.Errorf("序列化插件配置失败: %w", err)
-		}
-
-		m.config.PluginConfigs[name] = buf.Bytes()
-
-		if err := m.config.Save(); err != nil {
-			return zero, fmt.Errorf("保存配置失败: %w", err)
-		}
-
-		m.logger.Info("插件配置已更新", slog.String("plugin", name))
-	}
-
-	return updatedConfig, nil
-}
-
 func ExecutePluginGeneric[T any, R any](m *Manager, name string, data T) (R, error) {
 	m.mu.RLock()
 	plugin, exists := m.plugins[name]
@@ -545,6 +443,25 @@ func ExecutePluginGeneric[T any, R any](m *Manager, name string, data T) (R, err
 	}
 
 	return typedResult, nil
+}
+
+func Serializer[T any](data T) ([]byte, error) {
+	var buf bytes.Buffer
+	err := gob.NewEncoder(&buf).Encode(data)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func Deserializer[T any](data []byte) (T, error) {
+	var t T
+	buf := bytes.NewBuffer(data)
+	err := gob.NewDecoder(buf).Decode(&t)
+	if err != nil {
+		return t, err
+	}
+	return t, nil
 }
 
 func isVersionCompatible(currentVersion, constraint string) bool {

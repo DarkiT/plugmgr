@@ -50,7 +50,7 @@ type Option struct {
 }
 
 func (opt Option) converters() map[converterPair]TypeConverter {
-	var converters = map[converterPair]TypeConverter{}
+	converters := map[converterPair]TypeConverter{}
 
 	// save converters into map for faster lookup
 	for i := range opt.Converters {
@@ -77,7 +77,7 @@ type converterPair struct {
 }
 
 func (opt Option) fieldNameMapping() map[converterPair]FieldNameMapping {
-	var mapping = map[converterPair]FieldNameMapping{}
+	mapping := map[converterPair]FieldNameMapping{}
 
 	for i := range opt.FieldNameMapping {
 		pair := converterPair{
@@ -516,8 +516,10 @@ func shouldIgnore(v reflect.Value, bitFlags uint8, ignoreEmpty bool) bool {
 	return ignoreEmpty && bitFlags&tagOverride == 0 && v.IsZero()
 }
 
-var deepFieldsLock sync.RWMutex
-var deepFieldsMap = make(map[reflect.Type][]reflect.StructField)
+var (
+	deepFieldsLock sync.RWMutex
+	deepFieldsMap  = make(map[reflect.Type][]reflect.StructField)
+)
 
 func deepFields(reflectType reflect.Type) []reflect.StructField {
 	deepFieldsLock.RLock()

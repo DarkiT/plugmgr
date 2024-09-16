@@ -1,9 +1,10 @@
 package copier_test
 
 import (
-	"github.com/darkit/plugins/copier"
 	"reflect"
 	"testing"
+
+	"github.com/darkit/plugins/copier"
 )
 
 type A struct {
@@ -41,11 +42,11 @@ func Test_Struct_With_Converter(t *testing.T) {
 
 func Test_Map_With_Converter(t *testing.T) {
 	aa := map[string]*A{
-		"a": &A{A: 10},
+		"a": {A: 10},
 	}
 
 	bb := map[string]*B{
-		"a": &B{A: 10, b: 100},
+		"a": {A: 10, b: 100},
 	}
 
 	err := copier.CopyWithOption(&bb, &aa, newOptWithConverter())
@@ -63,15 +64,14 @@ func Test_Map_With_Converter(t *testing.T) {
 
 func Test_Slice_With_Converter(t *testing.T) {
 	aa := []*A{
-		&A{A: 10},
+		{A: 10},
 	}
 
 	bb := []*B{
-		&B{A: 10, b: 100},
+		{A: 10, b: 100},
 	}
 
 	err := copier.CopyWithOption(&bb, &aa, newOptWithConverter())
-
 	if err != nil {
 		t.Fatalf("copy slice error: %v", err)
 	}
@@ -89,13 +89,13 @@ func Test_Slice_Embedded_With_Converter(t *testing.T) {
 	aa := struct {
 		A []*A
 	}{
-		A: []*A{&A{A: 10}},
+		A: []*A{{A: 10}},
 	}
 
 	bb := struct {
 		A []*B
 	}{
-		A: []*B{&B{A: 10, b: 100}},
+		A: []*B{{A: 10, b: 100}},
 	}
 
 	err := copier.CopyWithOption(&bb, &aa, newOptWithConverter())

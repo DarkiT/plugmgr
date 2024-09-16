@@ -86,10 +86,6 @@ func (p *MathPlugin) ManageConfig(config interface{}) (interface{}, error) {
 	return p.config, nil
 }
 
-func (p *MathPlugin) ConfigType() interface{} {
-	return p.config
-}
-
 func (p *MathPlugin) Add(a, b int) int {
 	return a + b + p.config.DefaultValue
 }

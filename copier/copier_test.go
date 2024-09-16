@@ -193,7 +193,8 @@ func TestCopyFromStructToSlice(t *testing.T) {
 func TestCopyFromSliceToSlice(t *testing.T) {
 	users := []User{
 		{Name: "Jinzhu", Age: 18, Role: "Admin", Notes: []string{"hello world"}},
-		{Name: "Jinzhu2", Age: 22, Role: "Dev", Notes: []string{"hello world", "hello"}}}
+		{Name: "Jinzhu2", Age: 22, Role: "Dev", Notes: []string{"hello world", "hello"}},
+	}
 	employees := []Employee{}
 
 	if copier.Copy(&employees, users); len(employees) != 2 {
@@ -1677,7 +1678,6 @@ func TestDeepCopyAnonymousFieldTime(t *testing.T) {
 }
 
 func TestSqlNullFiled(t *testing.T) {
-
 	type sqlStruct struct {
 		MkId              sql.NullInt64
 		MkExpiryDateType  sql.NullInt32
