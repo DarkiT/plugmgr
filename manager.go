@@ -366,7 +366,6 @@ func (m *Manager) LoadPluginWithData(path string, data ...interface{}) error {
 	m.logger.Info("插件已加载",
 		slog.String("plugin", pluginName),
 		slog.String("version", metadata.Version),
-		slog.Any("config", metadata.Config),
 	)
 
 	return nil
