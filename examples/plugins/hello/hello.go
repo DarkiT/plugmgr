@@ -51,8 +51,8 @@ func (p *HelloPlugin) Shutdown() error {
 
 func (p *HelloPlugin) PreLoad(config []byte) error {
 	fmt.Println("HelloPlugin: PreLoad called")
-	newConfig, err := pm.Deserializer[HelloPluginConfig](config)
-	if err != nil {
+	var newConfig HelloPluginConfig
+	if err := pm.Deserializer(config, &newConfig); err != nil {
 		return fmt.Errorf("invalid config type")
 	}
 	p.config = newConfig
@@ -71,22 +71,10 @@ func (p *HelloPlugin) PreUnload() error {
 }
 
 func (p *HelloPlugin) ManageConfig(config []byte) ([]byte, error) {
-	c, err := pm.Serializer(p.config)
-	if err != nil {
+	var newConfig HelloPluginConfig
+	if err := pm.Deserializer(config, &newConfig); err != nil {
 		return nil, err
 	}
-
-	if config == nil {
-		return c, nil
-	}
-
-	newConfig, err := pm.Deserializer[HelloPluginConfig](config)
-	if err != nil {
-		return nil, fmt.Errorf("invalid config type")
-	}
-
 	p.config = newConfig
-	fmt.Println("HelloPlugin config updated:", p.config)
-
-	return c, nil
+	return pm.Serializer(p.config)
 }

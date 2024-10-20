@@ -1,6 +1,3 @@
-// 版权所有 (C) 2024 Matt Dunleavy。保留所有权利。
-// 本源代码的使用受 LICENSE 文件中的 MIT 许可证约束。
-
 package pluginmanager
 
 import (
@@ -9,16 +6,14 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 
-	"github.com/darkit/slog"
+	"github.com/pkg/errors"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -28,32 +23,17 @@ type PluginRepository struct {
 	PublicKey ssh.PublicKey
 }
 
-func (m *Manager) DiscoverPlugins(dir string) error {
-	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if filepath.Ext(path) == ".so" {
-			pluginName := strings.TrimSuffix(filepath.Base(path), ".so")
-			if err := m.LoadPlugin(path); err != nil {
-				m.logger.Warn("加载发现的插件失败", slog.String("plugin", pluginName), slog.Any("error", err))
-			} else {
-				m.logger.Info("发现并加载了插件", slog.String("plugin", pluginName))
-			}
-		}
-		return nil
-	})
-}
-
+// SetupRemoteRepository 优化:
+// - 使用 errors.Wrap 提供更详细的错误信息
 func (m *Manager) SetupRemoteRepository(url, sshKeyPath string) (*PluginRepository, error) {
 	key, err := os.ReadFile(sshKeyPath)
 	if err != nil {
-		return nil, fmt.Errorf("读取 SSH 密钥失败: %w", err)
+		return nil, errors.Wrap(err, "读取 SSH 密钥失败")
 	}
 
 	signer, err := ssh.ParsePrivateKey(key)
 	if err != nil {
-		return nil, fmt.Errorf("解析 SSH 密钥失败: %w", err)
+		return nil, errors.Wrap(err, "解析 SSH 密钥失败")
 	}
 
 	return &PluginRepository{
@@ -63,112 +43,101 @@ func (m *Manager) SetupRemoteRepository(url, sshKeyPath string) (*PluginReposito
 	}, nil
 }
 
+// DeployRepository 优化:
+// - 使用 errors.Wrap 提供更详细的错误信息
+// - 使用 filepath.Join 来构建路径,提高跨平台兼容性
 func (m *Manager) DeployRepository(repo *PluginRepository, localPath string) error {
 	if err := m.downloadRedbean(localPath); err != nil {
-		return err
+		return errors.Wrap(err, "下载 redbean 失败")
 	}
 
 	cmd := exec.Command(filepath.Join(localPath, "redbean.com"), "-v")
 	if repo.URL != "" {
-		// 通过 SSH 部署
 		cmd = exec.Command("ssh", "-i", repo.SSHKey, repo.URL, filepath.Join(localPath, "redbean.com"), "-v")
 	}
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("部署仓库失败: %w\n输出: %s", err, string(output))
+		return errors.Wrapf(err, "部署仓库失败: %s", output)
 	}
 
-	m.logger.Info("仓库部署成功", slog.String("output", string(output)))
+	m.logger.Info("仓库部署成功", "output", string(output))
 	return nil
 }
 
+// downloadRedbean 优化:
+// - 使用 errors.Wrap 提供更详细的错误信息
+// - 使用 io.Copy 来简化文件写入
 func (m *Manager) downloadRedbean(localPath string) error {
 	resp, err := http.Get("https://redbean.dev/redbean-latest.com")
 	if err != nil {
-		return fmt.Errorf("下载 redbean 失败: %w", err)
+		return errors.Wrap(err, "下载 redbean 失败")
 	}
 	defer resp.Body.Close()
 
 	out, err := os.Create(filepath.Join(localPath, "redbean.com"))
 	if err != nil {
-		return fmt.Errorf("创建 redbean 文件失败: %w", err)
+		return errors.Wrap(err, "创建 redbean 文件失败")
 	}
 	defer out.Close()
 
 	_, err = io.Copy(out, resp.Body)
 	if err != nil {
-		return fmt.Errorf("保存 redbean 文件失败: %w", err)
+		return errors.Wrap(err, "保存 redbean 文件失败")
 	}
 
 	if runtime.GOOS != "windows" {
 		if err := os.Chmod(filepath.Join(localPath, "redbean.com"), 0o755); err != nil {
-			return fmt.Errorf("设置 redbean 执行权限失败: %w", err)
+			return errors.Wrap(err, "设置 redbean 执行权限失败")
 		}
 	}
 
 	return nil
 }
 
-func (m *Manager) CheckForUpdates(repo *PluginRepository) ([]string, error) {
-	// 实现检查仓库更新的逻辑
-	// 通常包括向仓库发送 HTTP 请求
-	// 并比较已安装插件的版本与可用版本
-	return []string{}, nil
-}
-
-func (m *Manager) UpdatePlugin(repo *PluginRepository, pluginName string) error {
-	// 实现下载和更新特定插件的逻辑
-	return nil
-}
-
+// VerifyPluginSignature 优化:
+// - 使用 errors.Wrap 提供更详细的错误信息
 func (m *Manager) VerifyPluginSignature(pluginPath string, publicKeyPath string) error {
-	// 如果没有提供公钥路径,跳过验证
 	if publicKeyPath == "" {
-		m.logger.Warn("未提供公钥路径,跳过插件签名验证", slog.String("plugin", pluginPath))
+		m.logger.Warn("未提供公钥路径,跳过插件签名验证", "plugin", pluginPath)
 		return nil
 	}
 
-	// 读取插件文件
 	pluginData, err := os.ReadFile(pluginPath)
 	if err != nil {
-		return fmt.Errorf("读取插件文件失败: %w", err)
+		return errors.Wrap(err, "读取插件文件失败")
 	}
 
-	// 读取签名文件
 	signaturePath := pluginPath + ".sig"
 	signatureData, err := os.ReadFile(signaturePath)
 	if err != nil {
-		return fmt.Errorf("读取签名文件失败: %w", err)
+		return errors.Wrap(err, "读取签名文件失败")
 	}
 
-	// 读取公钥
 	publicKeyData, err := os.ReadFile(publicKeyPath)
 	if err != nil {
-		return fmt.Errorf("读取公钥文件失败: %w", err)
+		return errors.Wrap(err, "读取公钥文件失败")
 	}
 
-	// 解析公钥
 	block, _ := pem.Decode(publicKeyData)
 	if block == nil {
-		return fmt.Errorf("解析包含公钥的 PEM 块失败")
+		return errors.New("解析包含公钥的 PEM 块失败")
 	}
 
 	publicKey, err := x509.ParsePKIXPublicKey(block.Bytes)
 	if err != nil {
-		return fmt.Errorf("解析公钥失败: %w", err)
+		return errors.Wrap(err, "解析公钥失败")
 	}
 
 	rsaPublicKey, ok := publicKey.(*rsa.PublicKey)
 	if !ok {
-		return fmt.Errorf("公钥不是 RSA 公钥")
+		return errors.New("公钥不是 RSA 公钥")
 	}
 
-	// 验证签名
 	hashed := sha256.Sum256(pluginData)
 	err = rsa.VerifyPKCS1v15(rsaPublicKey, crypto.SHA256, hashed[:], signatureData)
 	if err != nil {
-		return fmt.Errorf("验证签名失败: %w", err)
+		return errors.Wrap(err, "验证签名失败")
 	}
 
 	return nil

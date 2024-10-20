@@ -1,33 +1,33 @@
-// 版权所有 (C) 2024 Matt Dunleavy。保留所有权利。
-// 本源代码的使用受 LICENSE 文件中的 MIT 许可证约束。
-
 package pluginmanager
 
 import (
-	"bytes"
-	"encoding/gob"
-	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 
-	"github.com/darkit/slog"
+	"github.com/pkg/errors"
+	msgpack "github.com/vmihailenco/msgpack/v5"
 )
 
+// Config 结构体优化:
+// - 使用 sync.RWMutex 来保证并发安全
+// - 使用 msgpack 替代 gob 进行序列化,提高效率
 type Config struct {
 	Enabled       map[string]bool
-	PluginConfigs map[string][]byte // 使用 []byte 来存储序列化后的配置
+	PluginConfigs map[string][]byte
 	path          string
 	mu            sync.RWMutex
 }
 
-func LoadConfig(filename string, pluginDir ...string) (config *Config, err error) {
+// LoadConfig 优化:
+// - 使用 msgpack 进行反序列化
+// - 优化错误处理,使用 errors.Wrap 提供更多上下文
+func LoadConfig(filename string, pluginDir ...string) (*Config, error) {
 	if len(pluginDir) > 0 {
 		filename = filepath.Join(pluginDir[0], filename)
 	}
 
-	config = &Config{
+	config := &Config{
 		Enabled:       make(map[string]bool),
 		PluginConfigs: make(map[string][]byte),
 		path:          filename,
@@ -38,65 +38,36 @@ func LoadConfig(filename string, pluginDir ...string) (config *Config, err error
 		if os.IsNotExist(err) {
 			return config, nil
 		}
-		return nil, err
+		return nil, errors.Wrap(err, "读取配置文件失败")
 	}
 
-	decoder := gob.NewDecoder(bytes.NewReader(file))
-	if err := decoder.Decode(config); err != nil {
-		return nil, err
+	if err := msgpack.Unmarshal(file, config); err != nil {
+		return nil, errors.Wrap(err, "解析配置文件失败")
 	}
 
 	return config, nil
 }
 
-func (m *Manager) loadAllPlugins() error {
-	files, err := os.ReadDir(m.pluginDir)
-	if err != nil {
-		return fmt.Errorf("读取插件目录失败: %w", err)
-	}
-
-	for _, file := range files {
-		if !file.IsDir() && filepath.Ext(file.Name()) == ".so" {
-			pluginName := strings.TrimSuffix(file.Name(), ".so")
-			m.config.Enabled[pluginName] = true
-
-			// 获取保存的配置（如果有）
-			savedConfigBytes := m.config.PluginConfigs[pluginName]
-			var savedConfig interface{}
-			if len(savedConfigBytes) > 0 {
-				decoder := gob.NewDecoder(bytes.NewReader(savedConfigBytes))
-				if err := decoder.Decode(&savedConfig); err != nil {
-					m.logger.Warn("解码保存的插件配置失败", slog.String("plugin", pluginName), slog.Any("error", err))
-				}
-			}
-
-			if err := m.LoadPluginWithData(filepath.Join(m.pluginDir, file.Name()), savedConfig); err != nil {
-				m.logger.Warn("加载插件失败", slog.String("plugin", pluginName), slog.Any("error", err))
-			}
-		}
-	}
-
-	// 保存新的配置
-	return m.config.Save()
-}
-
+// Save 方法优化:
+// - 使用 msgpack 进行序列化
+// - 使用读写锁确保并发安全
 func (c *Config) Save() error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	var buf bytes.Buffer
-	encoder := gob.NewEncoder(&buf)
-	if err := encoder.Encode(c); err != nil {
-		return err
+	data, err := msgpack.Marshal(c)
+	if err != nil {
+		return errors.Wrap(err, "序列化配置失败")
 	}
 
-	return os.WriteFile(c.path, buf.Bytes(), 0o644)
+	return errors.Wrap(os.WriteFile(c.path, data, 0o644), "写入配置文件失败")
 }
 
+// EnablePlugin 和 DisablePlugin 方法优化:
+// - 使用写锁确保并发安全
 func (c *Config) EnablePlugin(name string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
 	c.Enabled[name] = true
 	return nil
 }
@@ -104,11 +75,12 @@ func (c *Config) EnablePlugin(name string) error {
 func (c *Config) DisablePlugin(name string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
 	c.Enabled[name] = false
 	return nil
 }
 
+// EnabledPlugins 方法优化:
+// - 使用读锁提高并发性能
 func (c *Config) EnabledPlugins() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

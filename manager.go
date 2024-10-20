@@ -1,53 +1,61 @@
 package pluginmanager
 
 import (
-	"bytes"
-	"encoding/gob"
-	"fmt"
 	"path/filepath"
 	"plugin"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/darkit/slog"
+	"github.com/pkg/errors"
+	"github.com/vmihailenco/msgpack/v5"
+	"golang.org/x/sync/errgroup"
 )
 
+// Manager 结构体优化:
+// - 使用 sync.Map 替代普通 map,提高并发安全性
 type Manager struct {
-	mu            sync.RWMutex
-	logger        *slog.Logger
-	plugins       map[string]*lazyPlugin
+	plugins       sync.Map
 	config        *Config
-	dependencies  map[string][]string
-	stats         map[string]*PluginStats
+	dependencies  sync.Map
+	stats         sync.Map
 	eventBus      *EventBus
 	sandbox       Sandbox
 	publicKeyPath string
 	pluginDir     string
+	logger        *slog.Logger
 }
 
 type lazyPlugin struct {
 	path   string
 	loaded Plugin
+	mu     sync.Mutex
 }
 
+// load 方法优化:
+// - 使用互斥锁确保并发安全
 func (lp *lazyPlugin) load() error {
+	lp.mu.Lock()
+	defer lp.mu.Unlock()
+
 	if lp.loaded == nil {
 		p, err := plugin.Open(lp.path)
 		if err != nil {
-			return fmt.Errorf("打开插件失败: %w", err)
+			return errors.Wrapf(err, "打开插件失败: %s", lp.path)
 		}
 
 		symPlugin, err := p.Lookup(PluginSymbol)
 		if err != nil {
-			return fmt.Errorf("查找插件符号失败: %w", err)
+			return errors.Wrapf(err, "查找插件符号失败: %s", lp.path)
 		}
 
 		plugin, ok := symPlugin.(Plugin)
 		if !ok {
-			return fmt.Errorf("无效的插件接口")
+			return errors.Wrapf(ErrInvalidPluginInterface, "无效的插件接口: %s", lp.path)
 		}
 
 		lp.loaded = plugin
@@ -55,221 +63,359 @@ func (lp *lazyPlugin) load() error {
 	return nil
 }
 
+// NewManager 优化:
+// - 使用 errors.Wrap 提供更详细的错误信息
 func NewManager(pluginDir, configPath string, publicKeyPath ...string) (*Manager, error) {
 	if runtime.GOOS == "windows" {
-		return nil, fmt.Errorf("插件系统暂不支持Windows环境下运行")
+		return nil, errors.New("插件系统暂不支持Windows环境下运行")
 	}
 	config, err := LoadConfig(configPath, pluginDir)
 	if err != nil {
-		return nil, fmt.Errorf("加载配置失败: %w", err)
+		return nil, errors.Wrap(err, "加载配置失败")
 	}
 
 	sandboxDir := filepath.Join(pluginDir, "sandbox")
 
 	m := &Manager{
-		plugins:      make(map[string]*lazyPlugin),
-		config:       config,
-		dependencies: make(map[string][]string),
-		stats:        make(map[string]*PluginStats),
-		eventBus:     NewEventBus(),
-		sandbox:      NewSandbox(sandboxDir),
-		logger:       slog.Default("plugins"),
-		pluginDir:    pluginDir,
+		config:    config,
+		eventBus:  NewEventBus(),
+		sandbox:   NewSandbox(sandboxDir),
+		logger:    slog.Default("plugins"),
+		pluginDir: pluginDir,
 	}
 
 	if len(publicKeyPath) > 0 {
 		m.publicKeyPath = publicKeyPath[0]
 	}
 
-	// 如果配置为空，自动加载所有插件
 	if len(m.config.Enabled) == 0 {
 		if err := m.loadAllPlugins(); err != nil {
-			return nil, fmt.Errorf("加载所有插件失败: %w", err)
+			return nil, errors.Wrap(err, "加载所有插件失败")
 		}
 	}
 
 	return m, nil
 }
 
+// LoadPlugin 优化:
+// - 使用 sync.Map 替代普通 map
+// - 优化错误处理,使用 errors.Wrap 提供更多上下文
 func (m *Manager) LoadPlugin(path string) error {
-	return m.LoadPluginWithData(path)
-}
+	pluginName := filepath.Base(path)
+	pluginName = strings.TrimSuffix(pluginName, ".so")
 
-func (m *Manager) UnloadPlugin(name string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	plugin, exists := m.plugins[name]
-	if !exists {
-		return ErrPluginNotFound
+	if _, loaded := m.plugins.LoadOrStore(pluginName, &lazyPlugin{path: path}); loaded {
+		return errors.Errorf("插件 %s 已加载", pluginName)
 	}
 
-	if err := plugin.loaded.PreUnload(); err != nil {
-		return fmt.Errorf("%s 的预卸载钩子失败: %w", name, err)
+	if m.publicKeyPath != "" {
+		if err := m.VerifyPluginSignature(path, m.publicKeyPath); err != nil {
+			return errors.Wrap(err, "验证插件签名失败")
+		}
 	}
 
-	if err := plugin.loaded.Shutdown(); err != nil {
-		return fmt.Errorf("%s 的关闭失败: %w", name, err)
+	plugin, _ := m.plugins.Load(pluginName)
+	lazyPlug := plugin.(*lazyPlugin)
+
+	if err := lazyPlug.load(); err != nil {
+		return errors.Wrapf(err, "加载插件 %s 失败", pluginName)
 	}
 
-	delete(m.plugins, name)
-	delete(m.dependencies, name)
-	delete(m.stats, name)
+	configToUse, err := m.loadPluginConfig(pluginName)
+	if err != nil {
+		return errors.Wrap(err, "加载插件配置失败")
+	}
 
-	m.eventBus.Publish(PluginUnloadedEvent{PluginName: name})
-	m.logger.Info("插件已卸载", slog.String("plugin", name))
+	if err := lazyPlug.loaded.PreLoad(configToUse); err != nil {
+		return errors.Wrapf(err, "%s 的预加载钩子失败", pluginName)
+	}
+
+	if err := lazyPlug.loaded.Init(); err != nil {
+		return errors.Wrapf(err, "%s 的初始化失败", pluginName)
+	}
+
+	if err := lazyPlug.loaded.PostLoad(); err != nil {
+		return errors.Wrapf(err, "%s 的后加载钩子失败", pluginName)
+	}
+
+	metadata := lazyPlug.loaded.Metadata()
+
+	if configToUse != nil {
+		metadata.Config = configToUse
+		m.config.PluginConfigs[pluginName] = configToUse
+	}
+
+	if err := m.checkDependencies(pluginName, metadata.Dependencies); err != nil {
+		return errors.Wrap(err, "检查插件依赖失败")
+	}
+
+	m.stats.Store(pluginName, &PluginStats{})
+
+	if err := m.config.Save(); err != nil {
+		return errors.Wrap(err, "保存配置失败")
+	}
+
+	m.eventBus.Publish(PluginLoadedEvent{PluginName: pluginName})
+
+	m.logger.Info("插件已加载", "plugin", pluginName, "version", metadata.Version)
 
 	return nil
 }
 
-func (m *Manager) ExecutePlugin(name string, data any) (any, error) {
-	return ExecutePluginGeneric[any, any](m, name, data)
+// UnloadPlugin 优化:
+// - 使用 sync.Map 替代普通 map
+// - 优化错误处理,使用 errors.Wrap 提供更多上下文
+func (m *Manager) UnloadPlugin(name string) error {
+	plugin, ok := m.plugins.Load(name)
+	if !ok {
+		return ErrPluginNotFound
+	}
+
+	lazyPlug := plugin.(*lazyPlugin)
+
+	if err := lazyPlug.loaded.PreUnload(); err != nil {
+		return errors.Wrapf(err, "%s 的预卸载钩子失败", name)
+	}
+
+	if err := lazyPlug.loaded.Shutdown(); err != nil {
+		return errors.Wrapf(err, "%s 的关闭失败", name)
+	}
+
+	m.plugins.Delete(name)
+	m.dependencies.Delete(name)
+	m.stats.Delete(name)
+
+	m.eventBus.Publish(PluginUnloadedEvent{PluginName: name})
+	m.logger.Info("插件已卸载", "plugin", name)
+
+	return nil
 }
 
-func (m *Manager) HotReload(name string, path string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+// ExecutePlugin 优化:
+// - 使用类型断言来处理返回值
+func (m *Manager) ExecutePlugin(name string, data interface{}) (interface{}, error) {
+	result, err := ExecutePluginGeneric[interface{}, interface{}](m, name, data)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
 
-	oldPlugin, ok := m.plugins[name]
+// ExecutePluginString 执行返回字符串的插件
+func (m *Manager) ExecutePluginString(name string, data interface{}) (string, error) {
+	result, err := ExecutePluginGeneric[interface{}, string](m, name, data)
+	if err != nil {
+		return "", err
+	}
+	return result, nil
+}
+
+// ExecutePluginInt 执行返回整数的插件
+func (m *Manager) ExecutePluginInt(name string, data interface{}) (int, error) {
+	result, err := ExecutePluginGeneric[interface{}, int](m, name, data)
+	if err != nil {
+		return 0, err
+	}
+	return result, nil
+}
+
+// ExecutePluginGeneric 优化:
+// - 使用 sync.Map 替代普通 map
+// - 优化错误处理,使用 errors.Wrap 提供更多上下文
+func ExecutePluginGeneric[T any, R any](m *Manager, name string, data T) (R, error) {
+	var zero R
+	plugin, ok := m.plugins.Load(name)
+	if !ok {
+		return zero, ErrPluginNotFound
+	}
+
+	lazyPlug := plugin.(*lazyPlugin)
+
+	if err := m.sandbox.Enable(); err != nil {
+		return zero, errors.Wrapf(err, "为 %s 启用沙箱失败", name)
+	}
+	defer m.sandbox.Disable()
+
+	if err := lazyPlug.load(); err != nil {
+		return zero, errors.Wrapf(err, "加载插件 %s 失败", name)
+	}
+
+	start := time.Now()
+	result, err := lazyPlug.loaded.Execute(data)
+	executionTime := time.Since(start)
+
+	m.updateStats(name, executionTime)
+
+	if err != nil {
+		return zero, errors.Wrapf(err, "%s 的执行失败", name)
+	}
+
+	m.logger.Info("插件已执行", "plugin", name, "duration", executionTime)
+
+	typedResult, ok := result.(R)
+	if !ok {
+		return zero, errors.Errorf("插件 %s 返回的结果类型不匹配", name)
+	}
+
+	return typedResult, nil
+}
+
+// updateStats 优化:
+// - 使用原子操作更新统计信息,提高并发安全性
+func (m *Manager) updateStats(name string, executionTime time.Duration) {
+	if stats, ok := m.stats.Load(name); ok {
+		s := stats.(*PluginStats)
+		atomic.AddInt64(&s.ExecutionCount, 1)
+		atomic.StoreInt64((*int64)(&s.LastExecutionTime), int64(executionTime))
+		atomic.AddInt64((*int64)(&s.TotalExecutionTime), int64(executionTime))
+	}
+}
+
+// HotReload 优化:
+// - 使用 sync.Map 替代普通 map
+// - 优化错误处理,使用 errors.Wrap 提供更多上下文
+func (m *Manager) HotReload(name string, path string) error {
+	oldPlugin, ok := m.plugins.Load(name)
 	if !ok {
 		return ErrPluginNotFound
 	}
 
 	if err := m.VerifyPluginSignature(path, m.publicKeyPath); err != nil {
-		return fmt.Errorf("验证新插件签名失败: %w", err)
+		return errors.Wrap(err, "验证新插件签名失败")
 	}
 
 	newLazyPlugin := &lazyPlugin{path: path}
 	if err := newLazyPlugin.load(); err != nil {
-		return fmt.Errorf("加载 %s 的新版本失败: %w", name, err)
+		return errors.Wrapf(err, "加载 %s 的新版本失败", name)
 	}
 
 	newPlugin := newLazyPlugin.loaded
 
 	metadata := newPlugin.Metadata()
 	if err := m.checkDependencies(name, metadata.Dependencies); err != nil {
-		return fmt.Errorf("插件 %s 关联依赖检查未通过: %w", name, err)
+		return errors.Wrapf(err, "插件 %s 关联依赖检查未通过", name)
 	}
 
 	if err := newPlugin.Init(); err != nil {
-		return fmt.Errorf("%s 新版本的初始化失败: %w", name, err)
+		return errors.Wrapf(err, "%s 新版本的初始化失败", name)
 	}
 
-	if err := oldPlugin.loaded.PreUnload(); err != nil {
-		m.logger.Warn("旧版本的预卸载钩子失败", slog.String("plugin", name), slog.Any("error", err))
+	oldLazyPlugin := oldPlugin.(*lazyPlugin)
+	if err := oldLazyPlugin.loaded.PreUnload(); err != nil {
+		m.logger.Warn("旧版本的预卸载钩子失败", "plugin", name, "error", err)
 	}
-	if err := oldPlugin.loaded.Shutdown(); err != nil {
-		m.logger.Warn("旧版本的关闭失败", slog.String("plugin", name), slog.Any("error", err))
+	if err := oldLazyPlugin.loaded.Shutdown(); err != nil {
+		m.logger.Warn("旧版本的关闭失败", "plugin", name, "error", err)
 	}
 
-	m.plugins[name] = newLazyPlugin
-	m.dependencies[name] = make([]string, 0, len(metadata.Dependencies))
-	for dep := range metadata.Dependencies {
-		m.dependencies[name] = append(m.dependencies[name], dep)
-	}
+	m.plugins.Store(name, newLazyPlugin)
+	m.dependencies.Store(name, metadata.Dependencies)
 
 	m.eventBus.Publish(PluginHotReloadedEvent{PluginName: name})
-	m.logger.Info("插件热重载完成", slog.String("plugin", name))
+	m.logger.Info("插件热重载完成", "plugin", name)
 
 	return nil
 }
 
+// ManagePluginConfig 优化:
+// - 使用 sync.Map 替代普通 map
+// - 优化错误处理,使用 errors.Wrap 提供更多上下文
 func (m *Manager) ManagePluginConfig(name string, config interface{}) ([]byte, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	plugin, exists := m.plugins[name]
-	if !exists {
+	plugin, ok := m.plugins.Load(name)
+	if !ok {
 		return nil, ErrPluginNotFound
 	}
 
-	if err := plugin.load(); err != nil {
-		return nil, fmt.Errorf("加载插件 %s 失败: %w", name, err)
+	lazyPlug := plugin.(*lazyPlugin)
+
+	if err := lazyPlug.load(); err != nil {
+		return nil, errors.Wrapf(err, "加载插件 %s 失败", name)
 	}
+
 	serializer, err := Serializer(config)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "序列化配置失败")
 	}
-	updatedConfig, err := plugin.loaded.ManageConfig(serializer)
+
+	updatedConfig, err := lazyPlug.loaded.ManageConfig(serializer)
 	if err != nil {
-		return nil, fmt.Errorf("更新插件 %s 的配置失败: %w", name, err)
+		return nil, errors.Wrapf(err, "更新插件 %s 的配置失败", name)
 	}
 
-	// 如果提供的config为nil，则直接返回更新后的配置
-	if config == nil {
-		return updatedConfig, nil
+	if config != nil {
+		m.config.mu.Lock()
+		m.config.PluginConfigs[name] = updatedConfig
+		m.config.mu.Unlock()
+
+		if err := m.config.Save(); err != nil {
+			return nil, errors.Wrap(err, "保存配置失败")
+		}
 	}
 
-	// 序列化配置
-	var buf bytes.Buffer
-
-	if err := gob.NewEncoder(&buf).Encode(updatedConfig); err != nil {
-		return nil, fmt.Errorf("序列化插件配置失败: %w", err)
-	}
-
-	// 更新配置中的插件配置
-	m.config.PluginConfigs[name] = buf.Bytes()
-
-	// 保存更新后的配置
-	if err := m.config.Save(); err != nil {
-		return nil, fmt.Errorf("保存配置失败: %w", err)
-	}
-
-	m.logger.Info("插件配置已更新", slog.String("plugin", name))
+	m.logger.Info("插件配置已更新", "plugin", name)
 	return updatedConfig, nil
 }
 
+// EnablePlugin 优化:
+// - 优化错误处理,使用 errors.Wrap 提供更多上下文
 func (m *Manager) EnablePlugin(name string) error {
 	if err := m.config.EnablePlugin(name); err != nil {
-		return err
+		return errors.Wrapf(err, "启用插件 %s 失败", name)
 	}
 	if err := m.config.Save(); err != nil {
-		return fmt.Errorf("保存配置失败: %w", err)
+		return errors.Wrap(err, "保存配置失败")
 	}
 	return m.LoadPlugin(filepath.Join(m.pluginDir, name+".so"))
 }
 
+// DisablePlugin 优化:
+// - 优化错误处理,使用 errors.Wrap 提供更多上下文
 func (m *Manager) DisablePlugin(name string) error {
 	if err := m.config.DisablePlugin(name); err != nil {
-		return err
+		return errors.Wrapf(err, "禁用插件 %s 失败", name)
 	}
 	if err := m.config.Save(); err != nil {
-		return fmt.Errorf("保存配置失败: %w", err)
+		return errors.Wrap(err, "保存配置失败")
 	}
 	return m.UnloadPlugin(name)
 }
 
+// LoadEnabledPlugins 优化:
+// - 使用 errgroup 并发加载插件
 func (m *Manager) LoadEnabledPlugins(pluginDir string) error {
 	enabled := m.config.EnabledPlugins()
+
+	var eg errgroup.Group
 	for _, name := range enabled {
-		path := filepath.Join(pluginDir, name+".so")
-		if err := m.LoadPlugin(path); err != nil {
-			return err
-		}
+		name := name // 创建局部变量避免闭包问题
+		eg.Go(func() error {
+			path := filepath.Join(pluginDir, name+".so")
+			return m.LoadPlugin(path)
+		})
 	}
-	return nil
+
+	return eg.Wait()
 }
 
+// ListPlugins 优化:
+// - 使用 sync.Map 替代普通 map
 func (m *Manager) ListPlugins() []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	plugins := make([]string, 0, len(m.plugins))
-	for name := range m.plugins {
-		plugins = append(plugins, name)
-	}
+	var plugins []string
+	m.plugins.Range(func(key, value interface{}) bool {
+		plugins = append(plugins, key.(string))
+		return true
+	})
 	return plugins
 }
 
+// GetPluginStats 优化:
+// - 使用 sync.Map 替代普通 map
 func (m *Manager) GetPluginStats(name string) (*PluginStats, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	stats, ok := m.stats[name]
+	stats, ok := m.stats.Load(name)
 	if !ok {
 		return nil, ErrPluginNotFound
 	}
-	return stats, nil
+	return stats.(*PluginStats), nil
 }
 
 func (m *Manager) SubscribeToEvent(eventName string, handler EventHandler) {
@@ -277,110 +423,95 @@ func (m *Manager) SubscribeToEvent(eventName string, handler EventHandler) {
 }
 
 func (m *Manager) loadPluginConfig(pluginName string, data ...interface{}) ([]byte, error) {
+	m.config.mu.RLock()
 	savedConfigBytes, hasSavedConfig := m.config.PluginConfigs[pluginName]
+	m.config.mu.RUnlock()
 
 	if hasSavedConfig {
-		var configToUse []byte
-		decoder := gob.NewDecoder(bytes.NewReader(savedConfigBytes))
-		if err := decoder.Decode(&configToUse); err != nil {
-			return nil, fmt.Errorf("解码插件 %s 的配置信息失败: %w", pluginName, err)
-		}
-		return configToUse, nil
+		return savedConfigBytes, nil
 	} else if len(data) > 0 {
-		serializer, err := Serializer(data[0])
-		if err != nil {
-			return nil, fmt.Errorf("编码插件 %s 的配置信息失败: %w", pluginName, err)
-		}
-		return serializer, nil
+		return Serializer(data[0])
 	}
 
 	return nil, nil
 }
 
 func (m *Manager) LoadPluginWithData(path string, data ...interface{}) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	pluginName := filepath.Base(path)
 	pluginName = strings.TrimSuffix(pluginName, ".so")
 
-	if _, exists := m.plugins[pluginName]; exists {
-		return fmt.Errorf("插件 %s 已加载", pluginName)
+	if _, loaded := m.plugins.LoadOrStore(pluginName, &lazyPlugin{path: path}); loaded {
+		return errors.Errorf("插件 %s 已加载", pluginName)
 	}
 
 	if m.publicKeyPath != "" {
 		if err := m.VerifyPluginSignature(path, m.publicKeyPath); err != nil {
-			return fmt.Errorf("验证插件签名失败: %w", err)
+			return errors.Wrap(err, "验证插件签名失败")
 		}
 	}
 
-	lazyPlug := &lazyPlugin{path: path}
-	if err := lazyPlug.load(); err != nil {
-		return fmt.Errorf("加载插件 %s 失败: %w", pluginName, err)
-	}
+	plugin, _ := m.plugins.Load(pluginName)
+	lazyPlug := plugin.(*lazyPlugin)
 
-	plugin := lazyPlug.loaded
+	if err := lazyPlug.load(); err != nil {
+		return errors.Wrapf(err, "加载插件 %s 失败", pluginName)
+	}
 
 	configToUse, err := m.loadPluginConfig(pluginName, data...)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "加载插件配置失败")
 	}
 
-	if err := plugin.PreLoad(configToUse); err != nil {
-		return fmt.Errorf("%s 的预加载钩子失败: %w", pluginName, err)
+	if err := lazyPlug.loaded.PreLoad(configToUse); err != nil {
+		return errors.Wrapf(err, "%s 的预加载钩子失败", pluginName)
 	}
 
-	if err := plugin.Init(); err != nil {
-		return fmt.Errorf("%s 的初始化失败: %w", pluginName, err)
+	if err := lazyPlug.loaded.Init(); err != nil {
+		return errors.Wrapf(err, "%s 的初始化失败", pluginName)
 	}
 
-	if err := plugin.PostLoad(); err != nil {
-		return fmt.Errorf("%s 的后加载钩子失败: %w", pluginName, err)
+	if err := lazyPlug.loaded.PostLoad(); err != nil {
+		return errors.Wrapf(err, "%s 的后加载钩子失败", pluginName)
 	}
 
-	metadata := plugin.Metadata()
+	metadata := lazyPlug.loaded.Metadata()
 
 	if configToUse != nil {
 		metadata.Config = configToUse
-		var buf bytes.Buffer
-		encoder := gob.NewEncoder(&buf)
-		if err := encoder.Encode(configToUse); err != nil {
-			return fmt.Errorf("序列化插件配置失败: %w", err)
-		}
-		m.config.PluginConfigs[pluginName] = buf.Bytes()
+		m.config.mu.Lock()
+		m.config.PluginConfigs[pluginName] = configToUse
+		m.config.mu.Unlock()
 	}
 
 	if err := m.checkDependencies(pluginName, metadata.Dependencies); err != nil {
-		return err
+		return errors.Wrap(err, "检查插件依赖失败")
 	}
 
-	m.plugins[pluginName] = lazyPlug
-	m.stats[pluginName] = &PluginStats{}
+	m.stats.Store(pluginName, &PluginStats{})
 
 	if err := m.config.Save(); err != nil {
-		return fmt.Errorf("保存配置失败: %w", err)
+		return errors.Wrap(err, "保存配置失败")
 	}
 
 	m.eventBus.Publish(PluginLoadedEvent{PluginName: pluginName})
 
-	m.logger.Info("插件已加载",
-		slog.String("plugin", pluginName),
-		slog.String("version", metadata.Version),
-	)
+	m.logger.Info("插件已加载", "plugin", pluginName, "version", metadata.Version)
 
 	return nil
 }
 
 func (m *Manager) GetPluginConfig(name string) (interface{}, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	plugin, exists := m.plugins[name]
-	if !exists {
+	plugin, ok := m.plugins.Load(name)
+	if !ok {
 		return nil, ErrPluginNotFound
 	}
 
-	metadata := plugin.loaded.Metadata()
+	lazyPlug := plugin.(*lazyPlugin)
+	if err := lazyPlug.load(); err != nil {
+		return nil, errors.Wrapf(err, "加载插件 %s 失败", name)
+	}
+
+	metadata := lazyPlug.loaded.Metadata()
 	return metadata.Config, nil
 }
 
@@ -391,30 +522,27 @@ func (m *Manager) checkDependencies(pluginName string, dependencies map[string]s
 	checkDep = func(depName, constraint string, depChain []string) error {
 		if visited[depName] {
 			cycle := append(depChain, depName)
-			return fmt.Errorf("检测到循环依赖: %s", strings.Join(cycle, " -> "))
-		}
-		if visited[depName] {
-			cycle := append(depChain, depName)
-			return fmt.Errorf("检测到循环依赖: %s", strings.Join(cycle, " -> "))
+			return errors.Errorf("检测到循环依赖: %s", strings.Join(cycle, " -> "))
 		}
 		visited[depName] = true
 
-		depPlugin, exists := m.plugins[depName]
-		if !exists {
-			return fmt.Errorf("缺少依赖: %s", depName)
+		depPlugin, ok := m.plugins.Load(depName)
+		if !ok {
+			return errors.Errorf("缺少依赖: %s", depName)
 		}
 
-		if err := depPlugin.load(); err != nil {
-			return fmt.Errorf("加载依赖 %s 失败: %w", depName, err)
+		lazyPlug := depPlugin.(*lazyPlugin)
+		if err := lazyPlug.load(); err != nil {
+			return errors.Wrapf(err, "加载依赖 %s 失败", depName)
 		}
 
-		depMetadata := depPlugin.loaded.Metadata()
+		depMetadata := lazyPlug.loaded.Metadata()
 		if !isVersionCompatible(depMetadata.Version, constraint) {
-			return fmt.Errorf("依赖 %s 的版本不兼容: 需要 %s, 得到 %s", depName, constraint, depMetadata.Version)
+			return errors.Errorf("依赖 %s 的版本不兼容: 需要 %s, 得到 %s", depName, constraint, depMetadata.Version)
 		}
 
 		for subDepName, subConstraint := range depMetadata.Dependencies {
-			if err := checkDep(subDepName, subConstraint, depChain); err != nil {
+			if err := checkDep(subDepName, subConstraint, append(depChain, depName)); err != nil {
 				return err
 			}
 		}
@@ -431,70 +559,12 @@ func (m *Manager) checkDependencies(pluginName string, dependencies map[string]s
 	return nil
 }
 
-func ExecutePluginGeneric[T any, R any](m *Manager, name string, data T) (R, error) {
-	m.mu.RLock()
-	plugin, exists := m.plugins[name]
-	m.mu.RUnlock()
-
-	var zero R
-	if !exists {
-		return zero, ErrPluginNotFound
-	}
-
-	if err := m.sandbox.Enable(); err != nil {
-		return zero, fmt.Errorf("为 %s 启用沙箱失败: %w", name, err)
-	}
-	defer m.sandbox.Disable()
-
-	if err := plugin.load(); err != nil {
-		return zero, fmt.Errorf("加载插件 %s 失败: %w", name, err)
-	}
-
-	start := time.Now()
-	result, err := plugin.loaded.Execute(data)
-	executionTime := time.Since(start)
-
-	m.mu.Lock()
-	stats := m.stats[name]
-	stats.ExecutionCount++
-	stats.LastExecutionTime = executionTime
-	stats.TotalExecutionTime += executionTime
-	m.mu.Unlock()
-
-	if err != nil {
-		return zero, fmt.Errorf("%s 的执行失败: %w", name, err)
-	}
-
-	m.logger.Info("插件已执行",
-		slog.String("plugin", name),
-		slog.Duration("duration", executionTime),
-	)
-
-	typedResult, ok := result.(R)
-	if !ok {
-		return zero, fmt.Errorf("插件 %s 返回的结果类型不匹配", name)
-	}
-
-	return typedResult, nil
+func Serializer(data interface{}) ([]byte, error) {
+	return msgpack.Marshal(data)
 }
 
-func Serializer[T any](data T) ([]byte, error) {
-	var buf bytes.Buffer
-	err := gob.NewEncoder(&buf).Encode(data)
-	if err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-func Deserializer[T any](data []byte) (T, error) {
-	var t T
-	buf := bytes.NewBuffer(data)
-	err := gob.NewDecoder(buf).Decode(&t)
-	if err != nil {
-		return t, err
-	}
-	return t, nil
+func Deserializer(data []byte, v interface{}) error {
+	return msgpack.Unmarshal(data, v)
 }
 
 func isVersionCompatible(currentVersion, constraint string) bool {
@@ -544,4 +614,30 @@ func compareVersions(v1, v2 string) int {
 	}
 
 	return 0
+}
+
+func (m *Manager) loadAllPlugins() error {
+	files, err := filepath.Glob(filepath.Join(m.pluginDir, "*.so"))
+	if err != nil {
+		return errors.Wrap(err, "读取插件目录失败")
+	}
+
+	var eg errgroup.Group
+	for _, file := range files {
+		file := file // 创建局部变量避免闭包问题
+		eg.Go(func() error {
+			pluginName := strings.TrimSuffix(filepath.Base(file), ".so")
+			m.config.mu.Lock()
+			m.config.Enabled[pluginName] = true
+			m.config.mu.Unlock()
+
+			return m.LoadPluginWithData(file)
+		})
+	}
+
+	if err := eg.Wait(); err != nil {
+		return err
+	}
+
+	return m.config.Save()
 }

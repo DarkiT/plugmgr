@@ -1,11 +1,7 @@
-// 版权所有 (C) 2024 Matt Dunleavy。保留所有权利。
-// 本源代码的使用受 LICENSE 文件中的 MIT 许可证约束。
-
 package pluginmanager
 
 import (
-	"errors"
-	"fmt"
+	"github.com/pkg/errors"
 )
 
 var (
@@ -18,6 +14,8 @@ var (
 	ErrPluginSandboxViolation = errors.New("插件尝试违反沙箱")
 )
 
+// PluginError 优化:
+// - 使用 errors.Wrap 来包装错误,提供更多上下文信息
 type PluginError struct {
 	Op     string
 	Err    error
@@ -26,9 +24,9 @@ type PluginError struct {
 
 func (e *PluginError) Error() string {
 	if e.Plugin != "" {
-		return fmt.Sprintf("插件错误: %s: %s: %v", e.Plugin, e.Op, e.Err)
+		return errors.Wrapf(e.Err, "插件错误: %s: %s", e.Plugin, e.Op).Error()
 	}
-	return fmt.Sprintf("插件错误: %s: %v", e.Op, e.Err)
+	return errors.Wrapf(e.Err, "插件错误: %s", e.Op).Error()
 }
 
 func (e *PluginError) Unwrap() error {

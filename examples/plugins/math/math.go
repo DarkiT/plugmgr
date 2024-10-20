@@ -51,9 +51,9 @@ func (p *MathPlugin) Shutdown() error {
 
 func (p *MathPlugin) PreLoad(config []byte) error {
 	fmt.Println("MathPlugin: PreLoad called")
-	newConfig, err := pm.Deserializer[MathPluginConfig](config)
-	if err != nil {
-		return fmt.Errorf("invalid config type")
+	var newConfig MathPluginConfig
+	if err := pm.Deserializer(config, &newConfig); err != nil {
+		return err
 	}
 	p.config = newConfig
 
@@ -71,24 +71,12 @@ func (p *MathPlugin) PreUnload() error {
 }
 
 func (p *MathPlugin) ManageConfig(config []byte) ([]byte, error) {
-	c, err := pm.Serializer(p.config)
-	if err != nil {
+	var newConfig MathPluginConfig
+	if err := pm.Deserializer(config, &newConfig); err != nil {
 		return nil, err
 	}
-
-	if config == nil {
-		return c, nil
-	}
-
-	newConfig, err := pm.Deserializer[MathPluginConfig](config)
-	if err != nil {
-		return nil, fmt.Errorf("invalid config type")
-	}
-
 	p.config = newConfig
-	fmt.Println("HelloPlugin config updated:", p.config)
-
-	return c, nil
+	return pm.Serializer(p.config)
 }
 
 func (p *MathPlugin) Add(a, b int) int {
