@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>插件管理系统</title>
+    <link rel="stylesheet" href="/layui/css/layui.css">
+    <script src="/layui/layui.js"></script>
+    <script src="/layui/admin.js"></script>
+    <script src="/layui/axios.min.js"></script>
+</head>
+<body>
+    <div class="layui-layout layui-layout-admin">
+        <div class="layui-header">
+            <div class="layui-logo">插件管理系统</div>
+        </div>
+        <div class="layui-side layui-bg-black">
+            <div class="layui-side-scroll">
+                <ul class="layui-nav layui-nav-tree" lay-filter="test">
+                    <li class="layui-nav-item layui-this"><a href="#installed">已安装插件</a></li>
+                    <li class="layui-nav-item"><a href="#market">插件市场</a></li>
+                </ul>
+            </div>
+        </div>
+        <div class="layui-body">
+            <div class="layui-container" style="padding-top: 15px;">
+                <div id="installed">
+                    <table class="layui-table" id="installedPlugins">
+                        <thead>
+                            <tr>
+                                <th>插件名称</th>
+                                <th>当前版本</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- 已安装的插件将在这里动态加载 -->
+                        </tbody>
+                    </table>
+                </div>
+                <div id="market" style="display: none;">
+                    <table class="layui-table" id="marketPlugins">
+                        <thead>
+                            <tr>
+                                <th>插件名称</th>
+                                <th>描述</th>
+                                <th>作者</th>
+                                <th>最新版本</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- 插件市场的插件将在这里动态加载 -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        layui.use(['layer', 'element', 'table', 'jquery'], function(){
+            var layer = layui.layer;
+            var element = layui.element;
+            var table = layui.table;
+            var $ = layui.jquery;
+
+            function loadInstalledPlugins() {
+                $.get('/api/plugins', function(data) {
+                    var html = '';
+                    data.forEach(function(plugin) {
+                        html += '<tr>';
+                        html += '<td>' + plugin + '</td>';
+                        html += '<td id="version-' + plugin + '">Loading...</td>';
+                        html += '<td>';
+                        html += '<button class="layui-btn layui-btn-sm" onclick="executePlugin(\'' + plugin + '\')">执行</button>';
+                        html += '<button class="layui-btn layui-btn-sm layui-btn-normal" onclick="updatePlugin(\'' + plugin + '\')">更新</button>';
+                        html += '<button class="layui-btn layui-btn-sm layui-btn-danger" onclick="unloadPlugin(\'' + plugin + '\')">卸载</button>';
+                        html += '</td>';
+                        html += '</tr>';
+
+                        // 获取插件版本
+                        $.get('/api/plugins/' + plugin, function(pluginData) {
+                            $('#version-' + plugin).text(pluginData.Version);
+                        });
+                    });
+                    $('#installedPlugins tbody').html(html);
+                });
+            }
+
+            function loadMarketPlugins() {
+                $.get('/api/market', function(data) {
+                    var html = '';
+                    data.forEach(function(plugin) {
+                        html += '<tr>';
+                        html += '<td>' + plugin.name + '</td>';
+                        html += '<td>' + plugin.description + '</td>';
+                        html += '<td>' + plugin.author + '</td>';
+                        html += '<td>' + plugin.version + '</td>';
+                        html += '<td>';
+                        html += '<button class="layui-btn layui-btn-sm" onclick="installPlugin(\'' + plugin.name + '\', \'' + plugin.version + '\')">安装</button>';
+                        html += '</td>';
+                        html += '</tr>';
+                    });
+                    $('#marketPlugins tbody').html(html);
+                });
+            }
+
+            // 初始加载
+            loadInstalledPlugins();
+
+            // 导航切换
+            element.on('nav(test)', function(elem){
+                var href = $(elem).attr('href');
+                if(href === '#installed') {
+                    $('#installed').show();
+                    $('#market').hide();
+                    loadInstalledPlugins();
+                } else if(href === '#market') {
+                    $('#installed').hide();
+                    $('#market').show();
+                    loadMarketPlugins();
+                }
+            });
+
+            // 全局函数定义
+            window.executePlugin = function(name) {
+                layer.prompt({title: '输入执行参数', formType: 2}, function(text, index){
+                    layer.close(index);
+                    $.ajax({
+                        url: '/api/plugins/' + name + '/execute',
+                        method: 'POST',
+                        contentType: 'application/json',
+                        data: JSON.stringify(text),
+                        success: function(result) {
+                            layer.alert('执行结果: ' + JSON.stringify(result));
+                        },
+                        error: function(xhr) {
+                            layer.alert('执行失败: ' + xhr.responseText);
+                        }
+                    });
+                });
+            };
+
+            window.updatePlugin = function(name) {
+                $.get('/api/plugins/' + name, function(pluginData) {
+                    var versions = pluginData.Versions;
+                    layer.confirm('选择要更新的版本', {
+                        btn: versions
+                    }, function(index, layero){
+                        var version = $(layero).find('.layui-layer-btn' + index).text();
+                        $.ajax({
+                            url: '/api/plugins/' + name + '/update',
+                            method: 'POST',
+                            contentType: 'application/json',
+                            data: JSON.stringify(version),
+                            success: function() {
+                                layer.msg('更新成功');
+                                loadInstalledPlugins();
+                            },
+                            error: function(xhr) {
+                                layer.alert('更新失败: ' + xhr.responseText);
+                            }
+                        });
+                    });
+                });
+            };
+
+            window.unloadPlugin = function(name) {
+                layer.confirm('确定要卸载该插件吗？', function(index){
+                    $.ajax({
+                        url: '/api/plugins/' + name + '/unload',
+                        method: 'POST',
+                        success: function() {
+                            layer.msg('卸载成功');
+                            loadInstalledPlugins();
+                        },
+                        error: function(xhr) {
+                            layer.alert('卸载失败: ' + xhr.responseText);
+                        }
+                    });
+                    layer.close(index);
+                });
+            };
+
+            window.installPlugin = function(name, version) {
+                $.ajax({
+                    url: '/api/market/' + name + '/install',
+                    method: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify(version),
+                    success: function() {
+                        layer.msg('安装成功');
+                        loadMarketPlugins();
+                    },
+                    error: function(xhr) {
+                        layer.alert('安装失败: ' + xhr.responseText);
+                    }
+                });
+            };
+        });
+    </script>
+</body>
+</html>

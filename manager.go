@@ -1,6 +1,7 @@
 package pluginmanager
 
 import (
+	"fmt"
 	"path/filepath"
 	"plugin"
 	"runtime"
@@ -28,6 +29,9 @@ type Manager struct {
 	publicKeyPath string
 	pluginDir     string
 	logger        *slog.Logger
+
+	versionManager *VersionManager
+	pluginMarket   *PluginMarket
 }
 
 type lazyPlugin struct {
@@ -77,11 +81,13 @@ func NewManager(pluginDir, configPath string, publicKeyPath ...string) (*Manager
 	sandboxDir := filepath.Join(pluginDir, "sandbox")
 
 	m := &Manager{
-		config:    config,
-		eventBus:  NewEventBus(),
-		sandbox:   NewSandbox(sandboxDir),
-		logger:    slog.Default("plugins"),
-		pluginDir: pluginDir,
+		config:         config,
+		eventBus:       NewEventBus(),
+		sandbox:        NewSandbox(sandboxDir),
+		versionManager: NewVersionManager(),
+		pluginMarket:   NewPluginMarket(),
+		logger:         slog.Default("plugins"),
+		pluginDir:      pluginDir,
 	}
 
 	if len(publicKeyPath) > 0 {
@@ -640,4 +646,62 @@ func (m *Manager) loadAllPlugins() error {
 	}
 
 	return m.config.Save()
+}
+
+func (m *Manager) PublishPlugin(info PluginInfo) error {
+	m.pluginMarket.AddPlugin(info)
+	return nil
+}
+
+func (m *Manager) DownloadAndInstallPlugin(name, version string) error {
+	// 这里应该实现从远程服务器下载插件的逻辑
+	// 为了演示，我们假设插件已经在本地
+	pluginPath := filepath.Join(m.pluginDir, fmt.Sprintf("%s_v%s.so", name, version))
+
+	if err := m.LoadPlugin(pluginPath); err != nil {
+		return err
+	}
+
+	m.versionManager.AddVersion(name, version)
+	m.versionManager.SetActiveVersion(name, version)
+
+	return nil
+}
+
+func (m *Manager) ListAvailablePlugins() []PluginInfo {
+	return m.pluginMarket.ListPlugins()
+}
+
+func (m *Manager) HotUpdatePlugin(name, newVersion string) error {
+	_, exists := m.versionManager.GetActiveVersion(name)
+	if !exists {
+		return errors.New("插件未激活")
+	}
+
+	newPath := filepath.Join(m.pluginDir, fmt.Sprintf("%s_v%s.so", name, newVersion))
+	if err := m.HotReload(name, newPath); err != nil {
+		return err
+	}
+
+	m.versionManager.SetActiveVersion(name, newVersion)
+	return nil
+}
+
+func (m *Manager) RollbackPlugin(name, targetVersion string) error {
+	currentVersion, exists := m.versionManager.GetActiveVersion(name)
+	if !exists {
+		return errors.New("插件未激活")
+	}
+
+	if currentVersion == targetVersion {
+		return nil
+	}
+
+	targetPath := filepath.Join(m.pluginDir, fmt.Sprintf("%s_v%s.so", name, targetVersion))
+	if err := m.HotReload(name, targetPath); err != nil {
+		return err
+	}
+
+	m.versionManager.SetActiveVersion(name, targetVersion)
+	return nil
 }
