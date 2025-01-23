@@ -1,7 +1,8 @@
-package pluginmanager
+package plugmgr
 
 import (
 	"path/filepath"
+	"strings"
 
 	"github.com/pkg/errors"
 )
@@ -13,9 +14,7 @@ type Sandbox interface {
 }
 
 type ISandbox struct {
-	originalDir   string
-	originalUmask int
-	chrootDir     string
+	chrootDir string
 }
 
 func NewSandbox(chrootDir string) *ISandbox {
@@ -27,9 +26,16 @@ func NewSandbox(chrootDir string) *ISandbox {
 	}
 }
 
-// VerifyPluginPath 优化:
-// - 使用 filepath.Clean 来规范化路径
-// - 使用 errors.Wrap 提供更详细的错误信息
+// VerifyPluginPath 验证插件路径是否在沙箱目录内
+//
+//	参数:
+//	- path: 插件路径
+//	返回:
+//	- error: 验证过程中的错误
+//	功能:
+//	- 使用 filepath.Abs 获取插件的绝对路径
+//	- 使用 filepath.Clean 规范化路径
+//	- 检查插件路径是否在沙箱目录内
 func (s *ISandbox) VerifyPluginPath(path string) error {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
@@ -39,7 +45,7 @@ func (s *ISandbox) VerifyPluginPath(path string) error {
 	cleanPath := filepath.Clean(absPath)
 	cleanChrootDir := filepath.Clean(s.chrootDir)
 
-	if !filepath.HasPrefix(cleanPath, cleanChrootDir) {
+	if !strings.HasPrefix(filepath.Clean(cleanPath), filepath.Clean(cleanChrootDir)+string(filepath.Separator)) {
 		return errors.Wrapf(ErrPluginSandboxViolation, "插件路径 %s 不在沙箱目录 %s 内", cleanPath, cleanChrootDir)
 	}
 

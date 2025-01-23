@@ -1,4 +1,4 @@
-package pluginmanager
+package plugmgr
 
 import (
 	"crypto"
@@ -23,8 +23,17 @@ type PluginRepository struct {
 	PublicKey ssh.PublicKey
 }
 
-// SetupRemoteRepository 优化:
-// - 使用 errors.Wrap 提供更详细的错误信息
+// SetupRemoteRepository 设置远程插件仓库
+//
+//	参数:
+//	- url: 远程仓库的 URL 地址
+//	- sshKeyPath: SSH 密钥文件的路径
+//	返回:
+//	- *PluginRepository: 配置好的插件仓库对象
+//	- error: 设置过程中的错误
+//	功能:
+//	- 读取并解析 SSH 密钥
+//	- 创建并返回插件仓库配置对象
 func (m *Manager) SetupRemoteRepository(url, sshKeyPath string) (*PluginRepository, error) {
 	key, err := os.ReadFile(sshKeyPath)
 	if err != nil {
@@ -43,9 +52,17 @@ func (m *Manager) SetupRemoteRepository(url, sshKeyPath string) (*PluginReposito
 	}, nil
 }
 
-// DeployRepository 优化:
-// - 使用 errors.Wrap 提供更详细的错误信息
-// - 使用 filepath.Join 来构建路径,提高跨平台兼容性
+// DeployRepository 部署插件仓库
+//
+//	参数:
+//	- repo: 插件仓库配置对象
+//	- localPath: 本地部署路径
+//	返回:
+//	- error: 部署过程中的错误
+//	功能:
+//	- 下载 redbean 执行文件
+//	- 使用 SSH 或本地方式部署仓库
+//	- 验证部署结果
 func (m *Manager) DeployRepository(repo *PluginRepository, localPath string) error {
 	if err := m.downloadRedbean(localPath); err != nil {
 		return errors.Wrap(err, "下载 redbean 失败")
@@ -65,9 +82,16 @@ func (m *Manager) DeployRepository(repo *PluginRepository, localPath string) err
 	return nil
 }
 
-// downloadRedbean 优化:
-// - 使用 errors.Wrap 提供更详细的错误信息
-// - 使用 io.Copy 来简化文件写入
+// downloadRedbean 下载 redbean 执行文件
+//
+//	参数:
+//	- localPath: 下载文件的本地保存路径
+//	返回:
+//	- error: 下载过程中的错误
+//	功能:
+//	- 从官方地址下载最新版本的 redbean
+//	- 保存文件到指定路径
+//	- 设置适当的文件权限
 func (m *Manager) downloadRedbean(localPath string) error {
 	resp, err := http.Get("https://redbean.dev/redbean-latest.com")
 	if err != nil {
@@ -95,8 +119,17 @@ func (m *Manager) downloadRedbean(localPath string) error {
 	return nil
 }
 
-// VerifyPluginSignature 优化:
-// - 使用 errors.Wrap 提供更详细的错误信息
+// VerifyPluginSignature 验证插件签名
+//
+//	参数:
+//	- pluginPath: 插件文件路径
+//	- publicKeyPath: 公钥文件路径
+//	返回:
+//	- error: 验证过程中的错误
+//	功能:
+//	- 读取插件文件和签名文件
+//	- 解析公钥并验证签名
+//	- 使用 RSA-SHA256 算法进行签名验证
 func (m *Manager) VerifyPluginSignature(pluginPath string, publicKeyPath string) error {
 	if publicKeyPath == "" {
 		m.logger.Warn("未提供公钥路径,跳过插件签名验证", "plugin", pluginPath)

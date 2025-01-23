@@ -1,6 +1,8 @@
-package pluginmanager
+package plugmgr
 
 import (
+	"fmt"
+
 	"github.com/pkg/errors"
 )
 
@@ -11,22 +13,22 @@ var (
 	ErrIncompatibleVersion    = errors.New("插件版本不兼容")
 	ErrMissingDependency      = errors.New("缺少插件依赖")
 	ErrCircularDependency     = errors.New("检测到循环依赖")
-	ErrPluginSandboxViolation = errors.New("插件尝试违反沙箱")
+	ErrPluginSandboxViolation = errors.New("插件违反沙箱规则")
 )
 
-// PluginError 优化:
-// - 使用 errors.Wrap 来包装错误,提供更多上下文信息
 type PluginError struct {
-	Op     string
-	Err    error
-	Plugin string
+	Op      string
+	Code    int
+	Plugin  string
+	Err     error
+	Details map[string]interface{}
 }
 
 func (e *PluginError) Error() string {
-	if e.Plugin != "" {
-		return errors.Wrapf(e.Err, "插件错误: %s: %s", e.Plugin, e.Op).Error()
+	if len(e.Details) > 0 {
+		return fmt.Sprintf("插件错误[%d]: %s: %s: %v, 详细信息: %v", e.Code, e.Plugin, e.Op, e.Err, e.Details)
 	}
-	return errors.Wrapf(e.Err, "插件错误: %s", e.Op).Error()
+	return fmt.Sprintf("插件错误[%d]: %s: %s: %v", e.Code, e.Plugin, e.Op, e.Err)
 }
 
 func (e *PluginError) Unwrap() error {

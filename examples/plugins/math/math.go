@@ -3,10 +3,10 @@ package main
 import (
 	"fmt"
 
-	pm "github.com/darkit/plugins"
+	pm "github.com/darkit/plugmgr"
 )
 
-var Plugin MathPlugin
+var Plugin *MathPlugin
 
 type MathPluginConfig struct {
 	DefaultValue int

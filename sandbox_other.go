@@ -1,7 +1,7 @@
 //go:build !windows
 // +build !windows
 
-package pluginmanager
+package plugmgr
 
 import (
 	"os"
@@ -10,8 +10,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-// Enable 优化:
-// - 使用 errors.Wrap 提供更详细的错误信息
+// Enable 激活沙箱
 func (s *ISandbox) Enable() error {
 	var err error
 	s.originalDir, err = os.Getwd()
@@ -36,8 +35,7 @@ func (s *ISandbox) Enable() error {
 	return nil
 }
 
-// Disable 优化:
-// - 使用 errors.Wrap 提供更详细的错误信息
+// Disable 关闭沙箱
 func (s *ISandbox) Disable() error {
 	syscall.Umask(s.originalUmask)
 

@@ -1,37 +1,46 @@
-package pluginmanager
+package plugmgr
 
 import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/pkg/errors"
 	msgpack "github.com/vmihailenco/msgpack/v5"
 )
 
-// Config 结构体优化:
-// - 使用 sync.RWMutex 来保证并发安全
-// - 使用 msgpack 替代 gob 进行序列化,提高效率
-type Config struct {
-	Enabled       map[string]bool
-	PluginConfigs map[string][]byte
-	path          string
-	mu            sync.RWMutex
+// PluginData 存储插件配置的详细信息
+type PluginData struct {
+	Config      []byte            `msgpack:"config"`     // 插件的配置数据
+	UpdatedAt   time.Time         `msgpack:"updated_at"` // 最后更新时间
+	Permissions *PluginPermission `msgpack:"permissions,omitempty"`
 }
 
-// LoadConfig 优化:
-// - 使用 msgpack 进行反序列化
-// - 优化错误处理,使用 errors.Wrap 提供更多上下文
+// Config 配置结构
+type Config struct {
+	path          string                 `msgpack:"-"`       // 配置文件路径
+	mu            sync.RWMutex           `msgpack:"-"`       // 读写锁
+	enabled       map[string]bool        `msgpack:"enabled"` // 私有化：插件启用状态
+	pluginConfigs map[string]*PluginData `msgpack:"configs"` // 私有化：插件配置数据
+}
+
+// NewConfig 创建新的配置实例
+func NewConfig(filename string) *Config {
+	return &Config{
+		path:          filename,
+		enabled:       make(map[string]bool),
+		pluginConfigs: make(map[string]*PluginData),
+	}
+}
+
+// LoadConfig 加载配置文件
 func LoadConfig(filename string, pluginDir ...string) (*Config, error) {
 	if len(pluginDir) > 0 {
 		filename = filepath.Join(pluginDir[0], filename)
 	}
 
-	config := &Config{
-		Enabled:       make(map[string]bool),
-		PluginConfigs: make(map[string][]byte),
-		path:          filename,
-	}
+	config := NewConfig(filename)
 
 	file, err := os.ReadFile(filename)
 	if err != nil {
@@ -48,9 +57,7 @@ func LoadConfig(filename string, pluginDir ...string) (*Config, error) {
 	return config, nil
 }
 
-// Save 方法优化:
-// - 使用 msgpack 进行序列化
-// - 使用读写锁确保并发安全
+// Save 保存配置到文件
 func (c *Config) Save() error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -63,33 +70,88 @@ func (c *Config) Save() error {
 	return errors.Wrap(os.WriteFile(c.path, data, 0o644), "写入配置文件失败")
 }
 
-// EnablePlugin 和 DisablePlugin 方法优化:
-// - 使用写锁确保并发安全
-func (c *Config) EnablePlugin(name string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.Enabled[name] = true
-	return nil
+// GetPluginConfig 获取插件配置
+func (c *Config) GetPluginConfig(name string) (*PluginData, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	data, exists := c.pluginConfigs[name]
+	return data, exists
 }
 
-func (c *Config) DisablePlugin(name string) error {
+// SetPluginConfig 设置插件配置
+func (c *Config) SetPluginConfig(name string, config []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.Enabled[name] = false
-	return nil
+
+	c.pluginConfigs[name] = &PluginData{
+		Config:    config,
+		UpdatedAt: time.Now(),
+	}
+
+	return c.Save()
 }
 
-// EnabledPlugins 方法优化:
-// - 使用读锁提高并发性能
-func (c *Config) EnabledPlugins() []string {
+// IsEnabled 检查插件是否启用
+func (c *Config) IsEnabled(name string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.enabled[name]
+}
+
+// SetEnabled 设置插件启用状态
+func (c *Config) SetEnabled(name string, status bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.enabled[name] = status
+	return c.Save()
+}
+
+// GetEnabledPlugins 获取所有启用的插件
+func (c *Config) GetEnabledPlugins() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	var enabled []string
-	for name, isEnabled := range c.Enabled {
+	for name, isEnabled := range c.enabled {
 		if isEnabled {
 			enabled = append(enabled, name)
 		}
 	}
 	return enabled
+}
+
+// GetPluginLastUpdated 获取插件配置最后更新时间
+func (c *Config) GetPluginLastUpdated(name string) (time.Time, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if data, exists := c.pluginConfigs[name]; exists {
+		return data.UpdatedAt, true
+	}
+	return time.Time{}, false
+}
+
+// GetPluginPermissions 获取插件权限
+func (c *Config) GetPluginPermissions(name string) (*PluginPermission, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if data, exists := c.pluginConfigs[name]; exists && data.Permissions != nil {
+		return data.Permissions, true
+	}
+	return nil, false
+}
+
+// SetPluginPermissions 设置插件权限
+func (c *Config) SetPluginPermissions(name string, permissions *PluginPermission) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if data, exists := c.pluginConfigs[name]; exists {
+		data.Permissions = permissions
+		return c.Save()
+	}
+	return errors.New("plugin not found")
 }

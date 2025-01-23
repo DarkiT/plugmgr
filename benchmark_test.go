@@ -1,4 +1,4 @@
-package pluginmanager
+package plugmgr
 
 import (
 	"path/filepath"
