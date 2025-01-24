@@ -35,3 +35,22 @@ func BenchmarkExecutePlugin(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkMyPlugin(b *testing.B) {
+	m, err := NewManager("./testdata", "config.json")
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	if err := m.LoadPlugin(filepath.Join("testdata", "myplugin.so")); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := m.ExecutePlugin("MyPlugin", "测试数据")
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}

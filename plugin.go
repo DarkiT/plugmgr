@@ -4,8 +4,11 @@ import (
 	"plugin"
 	"sync"
 	"time"
+)
 
-	"github.com/pkg/errors"
+var (
+	pluginCache   sync.Map
+	pluginCacheMu sync.Mutex
 )
 
 type PluginMetadata struct {
@@ -63,11 +66,6 @@ type PluginStats struct {
 	TotalExecutionTime time.Duration
 }
 
-var (
-	pluginCache   sync.Map
-	pluginCacheMu sync.Mutex
-)
-
 // LoadPlugin 加载插件
 func LoadPlugin(path string) (Plugin, error) {
 	if cachedPlugin, ok := pluginCache.Load(path); ok {
@@ -84,17 +82,17 @@ func LoadPlugin(path string) (Plugin, error) {
 
 	p, err := plugin.Open(path)
 	if err != nil {
-		return nil, errors.Wrapf(err, "打开插件失败: %s", path)
+		return nil, wrapf(err, "打开插件失败: %s", path)
 	}
 
 	symPlugin, err := p.Lookup(PluginSymbol)
 	if err != nil {
-		return nil, errors.Wrapf(err, "查找插件符号失败: %s", path)
+		return nil, wrapf(err, "查找插件符号失败: %s", path)
 	}
 
 	pluginInfo, ok := symPlugin.(Plugin)
 	if !ok {
-		return nil, errors.Wrapf(ErrInvalidPluginInterface, "插件接口无效: %s", path)
+		return nil, wrapf(ErrInvalidPluginInterface, "插件接口无效: %s", path)
 	}
 
 	pluginCache.Store(path, pluginInfo)

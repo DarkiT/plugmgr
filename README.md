@@ -1,6 +1,6 @@
 # Go 语言插件管理器
 
-一个用于Go应用程序的插件管理库，支持动态加载、热重载、依赖管理及 Web 框架适配。
+一个用于Go应用程序的插件管理库，支持动态加载、热重载、依赖管理及 Web 框架适配。旨在提供一个轻量、安全、高性能的插件系统，使开发者能够轻松地构建可扩展的应用程序。通过解耦核心应用程序和插件，我们实现了更灵活的架构和更好的可维护性。
 
 ## 功能特点
 
@@ -16,7 +16,13 @@
 - 优化的内存管理
 - 支持多种 Web 框架适配器 (Gin, 标准 net/http)
 
----
+## 主要优势
+
+1. **模块化设计**：将应用程序功能解耦，提高系统的可扩展性
+2. **安全隔离**：通过沙箱机制确保插件运行的安全性
+3. **动态管理**：支持运行时加载、卸载和热重载插件
+4. **跨平台兼容**：支持主流操作系统和 Web 框架
+5. **性能优化**：最小化插件加载和执行的性能开销
 
 ## 安装与快速开始
 
@@ -42,7 +48,7 @@ func main() {
     // 初始化插件管理器
     manager, err := pm.NewManager(
         "./plugins",        // 插件目录
-        "./config.db",    // 配置文件路径
+        "./config.db",      // 配置文件路径
         "./public_key.pem", // 可选的公钥路径
     )
     if err != nil {
@@ -84,58 +90,111 @@ err = manager.UnloadPlugin("MyPlugin")
 err = manager.HotReload("MyPlugin", "./plugins/myplugin_v2.so")
 ```
 
----
-
 ## Web 框架集成
 
-### Gin 框架
+### 通用适配器接口
+
+插件管理器提供了一个通用的适配器接口，可以轻松集成到不同的 Web 框架中：
 
 ```go
-package main
+type Handler[T any] interface {
+    // 基础插件管理
+    ListPlugins() T
+    LoadPlugin() T
+    UnloadPlugin() T
+    EnablePlugin() T
+    DisablePlugin() T
+    PreloadPlugin() T
+    HotReloadPlugin() T
 
-import (
-    "log"
-    pm "github.com/darkit/plugmgr"
-    "github.com/darkit/plugmgr/adapter/gin"
-    "github.com/gin-gonic/gin"
-)
+    // 插件配置
+    GetPluginConfig() T
+    PluginConfigUpdated() T
 
-func main() {
-    manager, _ := pm.NewManager("./plugins", "config.db")
-    
-    r := gin.Default()
-    
-    // 创建并注册 Gin 适配器
-    handler := gin.NewGinHandler(manager)
-    handler.RegisterRoutes(r)
-    
-    r.Run(":8080")
+    // 插件执行
+    ExecutePlugin() T
+
+    // 插件权限
+    GetPluginPermission() T
+    SetPluginPermission() T
+    RemovePluginPermission() T
+
+    // 插件市场
+    ListMarketPlugins() T
+    InstallPlugin() T
+    RollbackPlugin() T
+
+    // 插件统计
+    GetPluginStats() T
 }
 ```
 
-### 标准 HTTP
+### 标准 HTTP 集成
 
 ```go
-package main
+// 创建 HTTP 处理器
+Http := adapter.NewPluginHandler(manager, func(h http.HandlerFunc) http.HandlerFunc {
+    return h
+})
 
-import (
-    "log"
-    "net/http"
-    pm "github.com/darkit/plugmgr"
-    "github.com/darkit/plugmgr/adapter/http"
-)
+// 获取处理器接口
+HttpHandlers := Http.GetHandlers()
 
-func main() {
-    manager, _ := pm.NewManager("./plugins", "config.db")
-    
-    // 创建并注册 HTTP 适配器
-    handler := http.NewHTTPHandler(manager)
-    
-    log.Fatal(http.ListenAndServe(":8080", handler.RegisterRoutes()))
-}
+// 创建路由
+mux := http.NewServeMux()
+
+// 设置路由
+mux.HandleFunc("/plugins", HttpHandlers.ListPlugins())
+mux.HandleFunc("/plugins/load/", HttpHandlers.LoadPlugin())
+// ... 其他路由
+
+log.Fatal(http.ListenAndServe(":8080", mux))
 ```
 
----
+### Gin 框架集成
+
+```go
+// 创建 Gin 处理器
+Gin := adapter.NewPluginHandler(manager, func(h http.HandlerFunc) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        h(c.Writer, c.Request)
+    }
+})
+
+// 获取处理器接口
+GinHandlers := Gin.GetHandlers()
+
+// 创建 Gin 路由
+r := gin.Default()
+
+// 设置路由
+r.GET("/plugins", GinHandlers.ListPlugins())
+r.POST("/plugins/load/:name", GinHandlers.LoadPlugin())
+// ... 其他路由
+
+log.Fatal(r.Run(":8080"))
+```
+
+### API 端点说明
+
+| 方法   | 路径                        | 说明               |
+|--------|---------------------------|-------------------|
+| GET    | /plugins                  | 获取插件列表         |
+| POST   | /plugins/load/:name       | 加载插件           |
+| POST   | /plugins/unload/:name     | 卸载插件           |
+| POST   | /plugins/enable/:name     | 启用插件           |
+| POST   | /plugins/disable/:name    | 禁用插件           |
+| POST   | /plugins/preload/:name    | 预加载插件         |
+| POST   | /plugins/hotreload/:name  | 热重载插件         |
+| GET    | /plugins/config/:name     | 获取插件配置        |
+| PUT    | /plugins/config/:name     | 更新插件配置        |
+| GET    | /plugins/permission/:name | 获取插件权限        |
+| PUT    | /plugins/permission/:name | 设置插件权限        |
+| DELETE | /plugins/permission/:name | 移除插件权限        |
+| GET    | /plugins/stats/:name      | 获取插件统计信息     |
+| GET    | /market                  | 获取插件市场列表     |
+| POST   | /market/install/:name    | 安装插件           |
+| POST   | /market/rollback/:name   | 回滚插件版本        |
 
 ## 插件开发指南
 
@@ -181,40 +240,100 @@ type Plugin interface {
 }
 ```
 
+## 插件生命周期与事件系统
 
-每个方法在插件的生命周期中扮演不同的角色：
+### 事件系统概述
 
-1. **元数据管理**
-   - `Metadata()`: 提供插件的基本信息，用于插件管理和版本控制
+插件管理器提供了完整的事件系统，用于监控和响应插件的各种状态变化。事件系统是插件生命周期管理的核心组件，允许开发者在插件的不同阶段进行精细化的监控和处理。
 
-2. **生命周期钩子**
-   - `Init()`: 插件的初始化阶段
-   - `PostLoad()`: 插件加载完成后的处理
-   - `PreUnload()`: 插件卸载前的清理工作
-   - `Shutdown()`: 插件关闭时的资源释放
+### 内置事件类型
 
-3. **配置管理**
-   - `PreLoad()`: 初始配置的预处理
-   - `ManageConfig()`: 运行时配置的更新和管理
+| 事件名称 | 触发时机 | 事件数据 |
+|---------|---------|---------|
+| `PluginLoaded` | 插件加载完成时 | 插件名称 |
+| `PluginInitialized` | 插件初始化完成时 | 插件名称 |
+| `PluginExecuted` | 插件执行完成时 | 插件名称、执行结果 |
+| `PluginConfigUpdated` | 插件配置更新时 | 插件名称、新配置 |
+| `PluginPreUnload` | 插件卸载前 | 插件名称 |
+| `PluginUnloaded` | 插件卸载完成时 | 插件名称 |
+| `PluginExecutionError` | 插件执行出错时 | 插件名称、错误信息 |
+| `PluginHotReloaded` | 插件热重载完成时 | 插件名称 |
 
-4. **功能执行**
-   - `Execute()`: 插件核心功能的执行入口
+### 事件订阅
 
-**插件生命周期事件**
+#### 基本订阅
 
 ```go
-manager.SubscribeToEvent("PluginLoaded", func(e pm.Event) {
-    fmt.Printf("插件加载: %s\n", e.(pm.PluginLoadedEvent).PluginName)
+// 创建事件总线（可选配置超时时间）
+eventBus := pm.NewEventBus(
+    pm.WithTimeout(3 * time.Second), // 设置事件处理超时时间
+)
+
+// 订阅插件加载事件
+eventBus.Subscribe("PluginLoaded", func(e pm.Event) {
+    fmt.Printf("插件已加载: %s\n", e.Data.Name)
 })
-manager.SubscribeToEvent("PluginUnloaded", func(e pm.Event) {
-    fmt.Printf("插件卸载: %s\n", e.(pm.PluginLoadedEvent).PluginName)
-})
-manager.SubscribeToEvent("PluginHotReloaded", func(e pm.Event) {
-    fmt.Printf("插件热加载: %s\n", e.(pm.PluginLoadedEvent).PluginName)
+
+// 订阅插件执行错误事件
+eventBus.Subscribe("PluginExecutionError", func(e pm.Event) {
+    fmt.Printf("插件执行错误: %s, 错误: %v\n", 
+        e.Data.Name, 
+        e.Data.Error,
+    )
 })
 ```
 
-### 插件示例
+#### 事件发布方式
+
+支持同步和异步两种事件发布方式：
+
+```go
+// 同步发布（阻塞等待所有处理器执行完成）
+err := eventBus.Publish(pm.Event{
+    EventName: "PluginLoaded",
+    Data: pm.EventData{
+        Name: "demo",
+    },
+})
+
+// 异步发布（带超时控制）
+err := eventBus.PublishAsync(pm.Event{
+    EventName: "PluginExecuted",
+    Data: pm.EventData{
+        Name: "demo",
+        Data: result,
+    },
+})
+```
+
+### 事件管理功能
+
+```go
+// 取消订阅事件
+handler := func(e pm.Event) { ... }
+eventBus.Unsubscribe("PluginLoaded", handler)
+
+// 检查事件是否有订阅者
+if eventBus.HasSubscribers("PluginLoaded") {
+    // ...
+}
+
+// 获取事件订阅者数量
+count := eventBus.SubscribersCount("PluginLoaded")
+
+// 关闭事件总线
+err := eventBus.Close()
+```
+
+### 事件处理特性
+
+- **超时控制**：可配置事件处理超时时间，防止处理器阻塞
+- **并发安全**：支持多个 goroutine 同时订阅和发布事件
+- **优雅关闭**：支持事件总线的安全关闭
+- **灵活订阅**：支持同一事件多个处理器
+- **处理器隔离**：单个处理器的错误不影响其他处理器
+
+## 插件示例
 
 ```go
 type MyPlugin struct{}
@@ -277,8 +396,6 @@ var Plugin *MyPlugin
 go build -buildmode=plugin -o myplugin.so myplugin.go
 ```
 
----
-
 ## 远程插件库与自动更新
 
 ```go
@@ -297,29 +414,11 @@ err := manager.InstallRedbean("1.5.3", "./redbean", "user@example.com:/path/to/r
 - **高效性**：提供快速插件分发能力。
 - **安全性**：内置插件签名验证。
 
----
-## REST API 支持
-
-| 方法     | 端点                       | 说明             |
-| -------- | ------------------------ | -------------- |
-| `GET`    | `/plugins`               | 获取已加载的插件列表 |
-| `POST`   | `/plugins/:name/load`    | 加载插件        |
-| `POST`   | `/plugins/:name/unload`  | 卸载插件        |
-| `POST`   | `/plugins/:name/execute` | 执行插件        |
-| `GET`    | `/plugins/:name/config`  | 获取插件配置     |
-| `PUT`    | `/plugins/:name/config`  | 更新插件配置     |
-| `POST`   | `/plugins/:name/enable`  | 启用插件        |
-| `POST`   | `/plugins/:name/disable` | 禁用插件        |
-
----
-
 ## 安全性
 
 - **插件签名验证**：确保插件来源可信。
 - **沙箱隔离**：防止插件影响宿主应用。
 - **权限控制**：限制插件访问的资源。
-
----
 
 ## 项目结构
 
@@ -347,9 +446,6 @@ err := manager.InstallRedbean("1.5.3", "./redbean", "user@example.com:/path/to/r
 └── sandbox_windows.go         // Windows 平台的沙箱实现
 ```
 
----
-
 ## 许可证 & 贡献
 
 本项目采用 MIT License 许可证，欢迎提交 Issue 和 Pull Request！
-

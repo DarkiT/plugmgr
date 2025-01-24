@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg/errors"
 	msgpack "github.com/vmihailenco/msgpack/v5"
 )
 
@@ -47,11 +46,11 @@ func LoadConfig(filename string, pluginDir ...string) (*Config, error) {
 		if os.IsNotExist(err) {
 			return config, nil
 		}
-		return nil, errors.Wrap(err, "读取配置文件失败")
+		return nil, wrap(err, "读取配置文件失败")
 	}
 
 	if err := msgpack.Unmarshal(file, config); err != nil {
-		return nil, errors.Wrap(err, "解析配置文件失败")
+		return nil, wrap(err, "解析配置文件失败")
 	}
 
 	return config, nil
@@ -64,10 +63,10 @@ func (c *Config) Save() error {
 
 	data, err := msgpack.Marshal(c)
 	if err != nil {
-		return errors.Wrap(err, "序列化配置失败")
+		return wrap(err, "序列化配置失败")
 	}
 
-	return errors.Wrap(os.WriteFile(c.path, data, 0o644), "写入配置文件失败")
+	return wrap(os.WriteFile(c.path, data, 0o644), "写入配置文件失败")
 }
 
 // GetPluginConfig 获取插件配置
@@ -153,5 +152,5 @@ func (c *Config) SetPluginPermissions(name string, permissions *PluginPermission
 		data.Permissions = permissions
 		return c.Save()
 	}
-	return errors.New("plugin not found")
+	return newError("plugin not found")
 }

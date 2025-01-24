@@ -152,7 +152,7 @@ func main() {
 	newConfig := map[string]interface{}{
 		"new_key": "new_value",
 	}
-	if _, err = manager.ManagePluginConfig("myplugin", newConfig); err != nil {
+	if _, err = manager.ConfigUpdated("myplugin", newConfig); err != nil {
 		log.Printf("更新插件配置失败: %v", err)
 	}
 

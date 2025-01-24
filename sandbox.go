@@ -3,8 +3,6 @@ package plugmgr
 import (
 	"path/filepath"
 	"strings"
-
-	"github.com/pkg/errors"
 )
 
 type Sandbox interface {
@@ -39,14 +37,14 @@ func NewSandbox(chrootDir string) *ISandbox {
 func (s *ISandbox) VerifyPluginPath(path string) error {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
-		return errors.Wrap(err, "获取插件绝对路径失败")
+		return wrap(err, "获取插件绝对路径失败")
 	}
 
 	cleanPath := filepath.Clean(absPath)
 	cleanChrootDir := filepath.Clean(s.chrootDir)
 
 	if !strings.HasPrefix(filepath.Clean(cleanPath), filepath.Clean(cleanChrootDir)+string(filepath.Separator)) {
-		return errors.Wrapf(ErrPluginSandboxViolation, "插件路径 %s 不在沙箱目录 %s 内", cleanPath, cleanChrootDir)
+		return wrapf(ErrPluginSandboxViolation, "插件路径 %s 不在沙箱目录 %s 内", cleanPath, cleanChrootDir)
 	}
 
 	return nil
