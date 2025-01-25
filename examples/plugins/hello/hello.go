@@ -70,7 +70,7 @@ func (p *HelloPlugin) PreUnload() error {
 	return nil
 }
 
-func (p *HelloPlugin) ManageConfig(config []byte) ([]byte, error) {
+func (p *HelloPlugin) ConfigUpdated(config []byte) ([]byte, error) {
 	var newConfig HelloPluginConfig
 	if err := pm.Deserializer(config, &newConfig); err != nil {
 		return nil, err

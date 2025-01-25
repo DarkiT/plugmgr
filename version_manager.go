@@ -11,7 +11,7 @@ type VersionManager struct {
 	mu            sync.RWMutex
 }
 
-func NewVersionManager() *VersionManager {
+func newVersionManager() *VersionManager {
 	return &VersionManager{
 		versions:      make(map[string][]string),
 		activeVersion: make(map[string]string),
@@ -68,7 +68,7 @@ type PluginMarket struct {
 	mu      sync.RWMutex
 }
 
-func NewPluginMarket() *PluginMarket {
+func newPluginMarket() *PluginMarket {
 	return &PluginMarket{
 		plugins: make(map[string]PluginInfo),
 	}

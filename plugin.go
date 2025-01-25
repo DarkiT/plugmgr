@@ -17,7 +17,7 @@ type PluginMetadata struct {
 	Dependencies map[string]string
 	GoVersion    string
 	Signature    []byte
-	Config       interface{}
+	Config       any
 }
 
 // Plugin 定义了插件必须实现的接口
@@ -47,11 +47,11 @@ type Plugin interface {
 	// 参数 config: 插件的配置数据
 	PreLoad(config []byte) error
 
-	// ManageConfig 管理插件配置
+	// ConfigUpdated 管理插件配置
 	// 用于更新和维护插件的配置信息
 	// 参数 config: 新的配置数据
 	// 返回: 处理后的配置数据和可能的错误
-	ManageConfig(config []byte) ([]byte, error)
+	ConfigUpdated(config []byte) ([]byte, error)
 
 	// Execute 执行插件功能
 	// 插件的主要业务逻辑实现

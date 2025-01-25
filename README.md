@@ -8,13 +8,11 @@
 - 版本控制和依赖管理
 - 热重载支持
 - 生命周期事件系统
-- 增强的沙箱功能以提高安全性
+- 沙箱功能以提高安全性
 - 插件性能的指标收集
 - 灵活的配置管理
 - 插件签名验证
-- 高并发支持
-- 优化的内存管理
-- 支持多种 Web 框架适配器 (Gin, 标准 net/http)
+- 支持多种 Web 框架适配器
 
 ## 主要优势
 
@@ -78,7 +76,7 @@ manager, err := pm.NewManager("./plugins", "config.db", "public_key.pem")
 **参数:**
 
 - `pluginDir`（字符串）：存储插件的目录。
-- `configPath`（字符串）：用于管理插件启用/禁用的 JSON 配置文件。
+- `configPath`（字符串）：用于管理插件启用/禁用的配置文件。
 - `publicKeyPath`（字符串，可选）：用于验证插件签名的公钥文件路径。
 
 ### 加载、执行和卸载插件
@@ -227,11 +225,11 @@ type Plugin interface {
     // config: 包含插件的初始配置数据
     PreLoad(config []byte) error
 
-    // ManageConfig 配置管理
+    // ConfigUpdated 配置管理
     // 处理插件的配置更新
     // config: 新的配置数据
     // 返回: 处理后的配置数据和可能的错误
-    ManageConfig(config []byte) ([]byte, error)
+    ConfigUpdated(config []byte) ([]byte, error)
 
     // Execute 执行插件功能
     // data: 输入参数
@@ -371,7 +369,7 @@ func (p *MyPlugin) PreLoad(config []byte) error {
     return nil
 }
 
-func (p *MyPlugin) ManageConfig(config []byte) ([]byte, error) {
+func (p *MyPlugin) ConfigUpdated(config []byte) ([]byte, error) {
     fmt.Println("管理插件配置")
     return config, nil
 }
@@ -425,14 +423,12 @@ err := manager.InstallRedbean("1.5.3", "./redbean", "user@example.com:/path/to/r
 ```
 .
 ├── adapter/                   // Web 框架适配器
-│   ├── gin/                   // Gin 框架适配器
-│   ├── http/                  // 标准 http 适配器
 │   └── adapter.go             // 适配器接口
 ├── docs/                      // 文档
 │   ├── PluginSignature.md     // 插件签名指南
 │   └── Redbean.md             // Redbean 配置说明
 ├── examples/                  // 示例代码
-│   ├── gin/                   // Gin 框架示例
+│   ├── http/                  // Http 框架示例
 │   └── plugins/               // 插件示例
 ├── config.go                  // 配置管理
 ├── discovery.go               // 插件发现和验证

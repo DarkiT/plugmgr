@@ -16,8 +16,8 @@ type PluginData struct {
 	Permissions *PluginPermission `msgpack:"permissions,omitempty"`
 }
 
-// Config 配置结构
-type Config struct {
+// config 配置结构
+type config struct {
 	path          string                 `msgpack:"-"`       // 配置文件路径
 	mu            sync.RWMutex           `msgpack:"-"`       // 读写锁
 	enabled       map[string]bool        `msgpack:"enabled"` // 私有化：插件启用状态
@@ -25,8 +25,8 @@ type Config struct {
 }
 
 // NewConfig 创建新的配置实例
-func NewConfig(filename string) *Config {
-	return &Config{
+func NewConfig(filename string) *config {
+	return &config{
 		path:          filename,
 		enabled:       make(map[string]bool),
 		pluginConfigs: make(map[string]*PluginData),
@@ -34,30 +34,30 @@ func NewConfig(filename string) *Config {
 }
 
 // LoadConfig 加载配置文件
-func LoadConfig(filename string, pluginDir ...string) (*Config, error) {
+func LoadConfig(filename string, pluginDir ...string) (*config, error) {
 	if len(pluginDir) > 0 {
 		filename = filepath.Join(pluginDir[0], filename)
 	}
 
-	config := NewConfig(filename)
+	c := NewConfig(filename)
 
 	file, err := os.ReadFile(filename)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return config, nil
+			return c, nil
 		}
 		return nil, wrap(err, "读取配置文件失败")
 	}
 
-	if err := msgpack.Unmarshal(file, config); err != nil {
+	if err := msgpack.Unmarshal(file, c); err != nil {
 		return nil, wrap(err, "解析配置文件失败")
 	}
 
-	return config, nil
+	return c, nil
 }
 
 // Save 保存配置到文件
-func (c *Config) Save() error {
+func (c *config) Save() error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -70,7 +70,7 @@ func (c *Config) Save() error {
 }
 
 // GetPluginConfig 获取插件配置
-func (c *Config) GetPluginConfig(name string) (*PluginData, bool) {
+func (c *config) GetPluginConfig(name string) (*PluginData, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -79,7 +79,7 @@ func (c *Config) GetPluginConfig(name string) (*PluginData, bool) {
 }
 
 // SetPluginConfig 设置插件配置
-func (c *Config) SetPluginConfig(name string, config []byte) error {
+func (c *config) SetPluginConfig(name string, config []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -92,14 +92,14 @@ func (c *Config) SetPluginConfig(name string, config []byte) error {
 }
 
 // IsEnabled 检查插件是否启用
-func (c *Config) IsEnabled(name string) bool {
+func (c *config) IsEnabled(name string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.enabled[name]
 }
 
 // SetEnabled 设置插件启用状态
-func (c *Config) SetEnabled(name string, status bool) error {
+func (c *config) SetEnabled(name string, status bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -108,7 +108,7 @@ func (c *Config) SetEnabled(name string, status bool) error {
 }
 
 // GetEnabledPlugins 获取所有启用的插件
-func (c *Config) GetEnabledPlugins() []string {
+func (c *config) GetEnabledPlugins() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -122,7 +122,7 @@ func (c *Config) GetEnabledPlugins() []string {
 }
 
 // GetPluginLastUpdated 获取插件配置最后更新时间
-func (c *Config) GetPluginLastUpdated(name string) (time.Time, bool) {
+func (c *config) GetPluginLastUpdated(name string) (time.Time, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -133,7 +133,7 @@ func (c *Config) GetPluginLastUpdated(name string) (time.Time, bool) {
 }
 
 // GetPluginPermissions 获取插件权限
-func (c *Config) GetPluginPermissions(name string) (*PluginPermission, bool) {
+func (c *config) GetPluginPermissions(name string) (*PluginPermission, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -144,7 +144,7 @@ func (c *Config) GetPluginPermissions(name string) (*PluginPermission, bool) {
 }
 
 // SetPluginPermissions 设置插件权限
-func (c *Config) SetPluginPermissions(name string, permissions *PluginPermission) error {
+func (c *config) SetPluginPermissions(name string, permissions *PluginPermission) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

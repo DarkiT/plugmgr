@@ -150,8 +150,8 @@ func (p *FileManagerPlugin) Execute(data interface{}) (interface{}, error) {
 	}
 }
 
-// ManageConfig 管理插件配置
-func (p *FileManagerPlugin) ManageConfig(config []byte) ([]byte, error) {
+// ConfigUpdated 管理插件配置
+func (p *FileManagerPlugin) ConfigUpdated(config []byte) ([]byte, error) {
 	if config == nil {
 		// 返回当前配置
 		return json.Marshal(p.config)

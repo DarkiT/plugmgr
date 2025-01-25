@@ -16,13 +16,13 @@ const (
 
 // 常用的插件错误
 var (
-	ErrPluginAlreadyLoaded    = NewPluginError("插件已加载", errTypeValidation)
-	ErrInvalidPluginInterface = NewPluginError("无效的插件接口", errTypeValidation)
-	ErrPluginNotFound         = NewPluginError("未找到插件", errTypeValidation)
-	ErrIncompatibleVersion    = NewPluginError("插件版本不兼容", errTypeValidation)
-	ErrMissingDependency      = NewPluginError("缺少插件依赖", errTypeValidation)
-	ErrCircularDependency     = NewPluginError("检测到循环依赖", errTypeValidation)
-	ErrPluginSandboxViolation = NewPluginError("插件违反沙箱规则", errTypeRuntime)
+	ErrPluginAlreadyLoaded    = newPluginError("插件已加载", errTypeValidation)
+	ErrInvalidPluginInterface = newPluginError("无效的插件接口", errTypeValidation)
+	ErrPluginNotFound         = newPluginError("未找到插件", errTypeValidation)
+	ErrIncompatibleVersion    = newPluginError("插件版本不兼容", errTypeValidation)
+	ErrMissingDependency      = newPluginError("缺少插件依赖", errTypeValidation)
+	ErrCircularDependency     = newPluginError("检测到循环依赖", errTypeValidation)
+	ErrPluginSandboxViolation = newPluginError("插件违反沙箱规则", errTypeRuntime)
 )
 
 // newError 返回一个带有提供消息的错误
@@ -30,7 +30,7 @@ func newError(message string) error {
 	if message == "" {
 		return nil
 	}
-	return NewPluginError(message, errTypeSystem)
+	return newPluginError(message, errTypeSystem)
 }
 
 // newErrorf 返回一个带有格式化消息的错误
@@ -38,7 +38,7 @@ func newErrorf(format string, args ...any) error {
 	if format == "" {
 		return nil
 	}
-	return NewPluginError(fmt.Sprintf(format, args...), errTypeSystem)
+	return newPluginError(fmt.Sprintf(format, args...), errTypeSystem)
 }
 
 // wrap 返回一个错误，将 err 注解上提供的消息
@@ -93,8 +93,8 @@ func getPluginError(err error) (*PluginError, bool) {
 	return nil, false
 }
 
-// NewPluginError 创建新的插件错误
-func NewPluginError(message string, errType string) *PluginError {
+// newPluginError 创建新的插件错误
+func newPluginError(message string, errType string) *PluginError {
 	var stack strings.Builder
 
 	// 获取调用栈信息

@@ -43,10 +43,10 @@ type PluginPermission struct {
 //	- permissions: 插件权限配置映射
 type Manager struct {
 	plugins       sync.Map // map[string]*lazyPlugin
-	config        *Config
+	config        *config
 	dependencies  sync.Map // map[string]map[string]string
 	stats         sync.Map // map[string]*PluginStats
-	eventBus      *EventBus
+	eventBus      *eventBus
 	sandbox       Sandbox
 	publicKeyPath string
 	pluginDir     string
@@ -118,10 +118,10 @@ func NewManager(pluginDir, configPath string, publicKeyPath ...string) (*Manager
 
 	m := &Manager{
 		config:         config,
-		eventBus:       NewEventBus(WithTimeout(3 * time.Second)),
-		sandbox:        NewSandbox(sandboxDir),
-		versionManager: NewVersionManager(),
-		pluginMarket:   NewPluginMarket(),
+		eventBus:       newEventBus(),
+		sandbox:        newSandbox(sandboxDir),
+		versionManager: newVersionManager(),
+		pluginMarket:   newPluginMarket(),
 		logger:         &logger{logger: slog.Default()},
 		pluginDir:      pluginDir,
 	}
@@ -173,17 +173,17 @@ func (m *Manager) PreloadPlugins(names []string) error {
 //	- 设置默认权限
 //	- 触发加载事件
 func (m *Manager) LoadPlugin(path string) error {
+	if m.publicKeyPath != "" {
+		if err := m.VerifyPluginSignature(path, m.publicKeyPath); err != nil {
+			return wrap(err, "验证插件签名失败")
+		}
+	}
+
 	pluginName := filepath.Base(path)
 	pluginName = strings.TrimSuffix(pluginName, ".so")
 
 	if _, loaded := m.plugins.LoadOrStore(pluginName, &lazyPlugin{path: path}); loaded {
 		return newErrorf("插件 %s 已加载", pluginName)
-	}
-
-	if m.publicKeyPath != "" {
-		if err := m.VerifyPluginSignature(path, m.publicKeyPath); err != nil {
-			return wrap(err, "验证插件签名失败")
-		}
 	}
 
 	pluginInfo, _ := m.plugins.Load(pluginName)
@@ -233,10 +233,6 @@ func (m *Manager) LoadPlugin(path string) error {
 	}
 
 	m.stats.Store(pluginName, &PluginStats{})
-
-	if err := m.config.Save(); err != nil {
-		return wrap(err, "保存配置失败")
-	}
 
 	// 使用 Notify 方法发布插件加载事件
 	m.eventBus.PublishAsync(Event{
@@ -468,13 +464,15 @@ func (m *Manager) updateStats(name string, executionTime time.Duration) {
 //	- 保持原有配置的情况下更新插件
 //	- 触发热重载事件
 func (m *Manager) HotReload(name string, path string) error {
+	if m.publicKeyPath != "" {
+		if err := m.VerifyPluginSignature(path, m.publicKeyPath); err != nil {
+			return wrap(err, "验证新插件签名失败")
+		}
+	}
+
 	oldPlugin, ok := m.plugins.Load(name)
 	if !ok {
 		return ErrPluginNotFound
-	}
-
-	if err := m.VerifyPluginSignature(path, m.publicKeyPath); err != nil {
-		return wrap(err, "验证新插件签名失败")
 	}
 
 	newLazyPlugin := &lazyPlugin{path: path}
@@ -540,7 +538,7 @@ func (m *Manager) ConfigUpdated(name string, config any) ([]byte, error) {
 		return nil, wrap(err, "序列化配置失败")
 	}
 
-	updatedConfig, err := lazyPlug.loaded.ManageConfig(serializer)
+	updatedConfig, err := lazyPlug.loaded.ConfigUpdated(serializer)
 	if err != nil {
 		return nil, wrapf(err, "更新插件 %s 的配置失败", name)
 	}
@@ -664,17 +662,17 @@ func (m *Manager) loadPluginConfig(pluginName string, data ...any) ([]byte, erro
 //	- 设置初始配置
 //	- 执行完整的插件初始化流程
 func (m *Manager) LoadPluginWithData(path string, data ...any) error {
+	if m.publicKeyPath != "" {
+		if err := m.VerifyPluginSignature(path, m.publicKeyPath); err != nil {
+			return wrap(err, "验证插件签名失败")
+		}
+	}
+
 	pluginName := filepath.Base(path)
 	pluginName = strings.TrimSuffix(pluginName, ".so")
 
 	if _, loaded := m.plugins.LoadOrStore(pluginName, &lazyPlugin{path: path}); loaded {
 		return newErrorf("插件 %s 已加载", pluginName)
-	}
-
-	if m.publicKeyPath != "" {
-		if err := m.VerifyPluginSignature(path, m.publicKeyPath); err != nil {
-			return wrap(err, "验证插件签名失败")
-		}
 	}
 
 	pluginInfo, _ := m.plugins.Load(pluginName)
@@ -715,10 +713,6 @@ func (m *Manager) LoadPluginWithData(path string, data ...any) error {
 	}
 
 	m.stats.Store(pluginName, &PluginStats{})
-
-	if err = m.config.Save(); err != nil {
-		return wrap(err, "保存配置失败")
-	}
 
 	m.eventBus.PublishAsync(Event{
 		EventName: PluginLoaded,
@@ -818,11 +812,11 @@ func (m *Manager) loadAllPlugins() error {
 		})
 	}
 
-	if err := eg.Wait(); err != nil {
+	if err = eg.Wait(); err != nil {
 		return err
 	}
 
-	return m.config.Save()
+	return nil
 }
 
 // PublishPlugin 发布插件到插件市场
@@ -851,8 +845,7 @@ func (m *Manager) PublishPlugin(info PluginInfo) error {
 //	- 安装并初始化插件
 //	- 更新版本信息
 func (m *Manager) InstallPlugin(name, version string) error {
-	// 这里应该实现从远程服务器下载插件的逻辑
-	// 为了演示，我们假设插件已经在本地
+	// 这里我们假设插件已经在本地
 	pluginPath := filepath.Join(m.pluginDir, fmt.Sprintf("%s_v%s.so", name, version))
 
 	if err := m.LoadPlugin(pluginPath); err != nil {
@@ -981,6 +974,38 @@ func (m *Manager) LoadPluginPermissions(permissions map[string]*PluginPermission
 	for name, perm := range permissions {
 		m.permissions.Store(name, perm)
 	}
+}
+
+// SetSandbox 设置沙箱环境
+//
+//	功能:
+//	- 设置插件管理器的沙箱环境
+func (m *Manager) SetSandbox(sandbox Sandbox) {
+	m.sandbox = sandbox
+}
+
+// GetEventBus 获取事件总线
+//
+//	功能:
+//	- 获取事件总线实例
+func (m *Manager) GetEventBus() *eventBus {
+	return m.eventBus
+}
+
+// GetVersionManager 获取版本管理器
+//
+//	功能:
+//	- 获取版本管理器实例
+func (m *Manager) GetVersionManager() *VersionManager {
+	return m.versionManager
+}
+
+// GetPluginMarket 获取插件市场
+//
+//	功能:
+//	- 获取插件市场实例
+func (m *Manager) GetPluginMarket() *PluginMarket {
+	return m.pluginMarket
 }
 
 func (m *Manager) preloadPlugin(name string) error {

@@ -70,7 +70,7 @@ func (p *MathPlugin) PreUnload() error {
 	return nil
 }
 
-func (p *MathPlugin) ManageConfig(config []byte) ([]byte, error) {
+func (p *MathPlugin) ConfigUpdated(config []byte) ([]byte, error) {
 	var newConfig MathPluginConfig
 	if err := pm.Deserializer(config, &newConfig); err != nil {
 		return nil, err

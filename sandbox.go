@@ -12,10 +12,11 @@ type Sandbox interface {
 }
 
 type ISandbox struct {
-	chrootDir string
+	chrootDir   string
+	originalDir string
 }
 
-func NewSandbox(chrootDir string) *ISandbox {
+func newSandbox(chrootDir string) *ISandbox {
 	if chrootDir == "" {
 		chrootDir = "./sandbox"
 	}
